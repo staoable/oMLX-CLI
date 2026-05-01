@@ -1,0 +1,5 @@
+.omlxcli/web/
+.omlxcli/**/*.db
+.omlxcli/**/__pycache__/
+__pycache__/
+.env.local

@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>oMLX CLI</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <aside class="sidebar" id="sidebar" aria-label="会话列表">
+        <div class="sidebar__brand">
+          <span class="sidebar__logo" aria-hidden="true"></span>
+          <div class="sidebar__titles">
+            <span class="sidebar__name">oMLX CLI</span>
+            <span class="sidebar__sub">本地对话</span>
+          </div>
+        </div>
+        <button id="newSessionBtn" type="button" class="btn btn--primary btn--block">
+          新建会话
+        </button>
+        <div class="sidebar__section-label">近期会话</div>
+        <div id="sessionList" class="session-list" role="list"></div>
+      </aside>
+
+      <div class="main">
+        <header class="topbar">
+          <div class="topbar__row topbar__row--chrome">
+            <span class="topbar__chrome-label" aria-hidden="true">控制台</span>
+            <div class="topbar__chrome-actions">
+              <button id="openSettingsModalBtn" type="button" class="btn btn--toolbar" title="模型、API、工作目录与执行策略">
+                <span class="btn__icon" aria-hidden="true">⚡</span>
+                <span class="btn__text">设置</span>
+              </button>
+              <button id="openDebugModalBtn" type="button" class="btn btn--toolbar btn--toolbar-muted" title="执行审计与上下文注入">
+                <span class="btn__icon" aria-hidden="true">◉</span>
+                <span class="btn__text">调试</span>
+              </button>
+            </div>
+          </div>
+          <div class="topbar__row topbar__row--primary">
+            <div class="topbar__left">
+              <button
+                id="sidebarToggle"
+                type="button"
+                class="btn btn--ghost btn--icon sidebar-toggle"
+                aria-expanded="true"
+                aria-controls="sidebar"
+                title="折叠侧栏"
+              >
+                ⟨
+              </button>
+              <div class="title-row">
+                <h1 class="topbar__title" id="chatTitle">选择或新建会话</h1>
+                <button
+                  id="editTitleBtn"
+                  type="button"
+                  class="btn btn--ghost btn--icon title-edit-btn"
+                  aria-label="编辑会话标题"
+                  title="编辑标题"
+                >
+                  ✎
+                </button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div class="chat-scroll" id="chatScroll">
+          <div id="chatList" class="thread" role="log" aria-live="polite" aria-relevant="additions"></div>
+        </div>
+
+        <footer class="composer">
+          <div class="composer__inner">
+            <div id="attachmentTray" class="attachment-tray" hidden></div>
+            <textarea
+              id="messageInput"
+              class="composer__input"
+              rows="1"
+              placeholder="在此输入消息，Enter 发送…"
+              aria-label="消息输入"
+            ></textarea>
+            <div class="composer__actions">
+              <div class="composer__left-actions">
+                <button id="attachBtn" type="button" class="btn btn--ghost" aria-label="添加附件">
+                  附件
+                </button>
+                <input id="fileInput" type="file" multiple hidden />
+                <span class="composer__hint">主对话区在上方；此处为输入框 · Enter 发送 · Shift+Enter 换行 · 可拖拽/粘贴附件</span>
+              </div>
+              <button id="sendBtn" type="button" class="btn btn--send" aria-label="发送消息">发送</button>
+            </div>
+          </div>
+        </footer>
+      </div>
+    </div>
+
+    <div id="settingsModal" class="modal" hidden>
+      <div class="modal__backdrop" data-close-modal="settings"></div>
+      <div class="modal__panel modal__panel--settings" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle">
+        <div class="modal__head">
+          <h3 id="settingsModalTitle">设置</h3>
+          <button type="button" class="btn btn--ghost btn--icon modal__close" data-close-modal="settings" aria-label="关闭">×</button>
+        </div>
+        <p class="modal__lede">模型、上游 API、工作目录与 CLI 执行策略。改完后请点「保存」。</p>
+        <div class="settings-layout">
+          <section class="settings-card">
+            <div class="settings-card__title">连接配置</div>
+            <div class="settings-grid settings-grid--modal">
+              <label class="field field--workspace">
+                <span class="field__label">工作目录</span>
+                <input
+                  id="workspacePathInput"
+                  type="text"
+                  class="input"
+                  placeholder="未给路径时，笔记与文件默认写入此目录（绝对路径）"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+              </label>
+              <div class="field-cluster field-cluster--model">
+                <label class="field field--model">
+                  <span class="field__label">模型</span>
+                  <select id="modelSelect" class="input input--select" aria-label="模型"></select>
+                </label>
+                <button
+                  id="refreshModelsBtn"
+                  type="button"
+                  class="btn btn--ghost btn--icon settings-refresh"
+                  title="从当前 API 拉取模型列表"
+                  aria-label="刷新模型列表"
+                >
+                  ↻
+                </button>
+              </div>
+              <label class="field field--api">
+                <span class="field__label">API</span>
+                <input
+                  id="apiBaseInput"
+                  type="text"
+                  class="input"
+                  placeholder="http://127.0.0.1:8000/v1"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+              </label>
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <div class="settings-card__title">执行策略</div>
+            <div class="field field--exec">
+              <label class="toggle-row">
+                <input id="executionEnabledInput" type="checkbox" />
+                <span>允许执行CLI</span>
+              </label>
+              <label class="toggle-row">
+                <input id="confirmEachInput" type="checkbox" checked />
+                <span>风险命令确认</span>
+              </label>
+            </div>
+          </section>
+
+          <div class="settings-footer">
+            <button id="saveSessionBtn" type="button" class="btn btn--secondary settings-save">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="debugModal" class="modal" hidden>
+      <div class="modal__backdrop" data-close-modal="debug"></div>
+      <div class="modal__panel modal__panel--debug" role="dialog" aria-modal="true" aria-labelledby="debugModalTitle">
+        <div class="modal__head">
+          <h3 id="debugModalTitle">调试</h3>
+          <button type="button" class="btn btn--ghost btn--icon modal__close" data-close-modal="debug" aria-label="关闭">×</button>
+        </div>
+        <p class="modal__lede">执行审计与上下文注入记录，用于排障；不参与模型推理。</p>
+        <div class="observability observability--modal">
+          <div class="observability__head">
+            <span class="field__label">观测</span>
+            <div class="observability__actions">
+              <select id="obsExecStatusFilter" class="input input--select input--compact" aria-label="执行状态筛选">
+                <option value="all">全部状态</option>
+                <option value="success">success</option>
+                <option value="error">error</option>
+                <option value="blocked">blocked</option>
+                <option value="need_confirm">need_confirm</option>
+                <option value="cancelled">cancelled</option>
+              </select>
+              <button id="refreshObsBtn" type="button" class="btn btn--ghost">刷新</button>
+            </div>
+          </div>
+          <div id="obsPanel" class="observability__body">
+            <div class="obs-empty">选择会话后可在此查看执行与上下文注入记录</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirmModal" class="modal modal--elevated" hidden>
+      <div class="modal__backdrop"></div>
+      <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <h3 id="confirmTitle">确认执行命令</h3>
+        <p id="confirmReason" class="modal__reason"></p>
+        <pre id="confirmCommand" class="modal__command"></pre>
+        <div class="modal__actions">
+          <button id="cancelCommandBtn" type="button" class="btn btn--ghost">取消</button>
+          <button id="confirmCommandBtn" type="button" class="btn btn--primary">确认执行</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked@15.0.6/marked.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.2/dist/purify.min.js" crossorigin="anonymous"></script>
+    <script type="module" src="/ui/app.js"></script>
+  </body>
+</html>
