@@ -161,6 +161,8 @@ GitHub Actions（`.github/workflows/ci.yml`）：安装依赖与 Playwright Chro
 
 ## 相关文档
 
+仓库首页 **`README.md`** 含 **维护者自测环境** 与 **界面 / 技能冒烟示意图**（`docs/readme/`），便于访客建立信心。
+
 | 文件 | 说明 |
 |------|------|
 | `Skills_README.md` | 技能目录、manifest、`OI_TOOL_MAP`、冒烟变量等。 |

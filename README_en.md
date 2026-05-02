@@ -161,6 +161,8 @@ CI (`.github/workflows/ci.yml`): `pip install -r requirements.txt`, Playwright C
 
 ## Related documentation
 
+The repository home **`README.md`** includes the **maintainer reference environment** and **UI / skills smoke illustrations** (`docs/readme/`) to help visitors trust local runs.
+
 | File | Description |
 |------|-------------|
 | `Skills_README.md` | Skills catalog, manifest, OI_TOOL_MAP workflow, smoke variables. |
