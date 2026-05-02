@@ -7,7 +7,7 @@
 ### 变更
 
 - 文档：根目录 **`README.md`** 作为仓库首页（宣传 + 快速入口），完整说明拆至 **`README_cn.md`** / **`README_en.md`** 双语维护；`Skills_README.md` 互补说明已更新。
-- 文档：首页增加 **维护者自测环境表** 与 **`docs/readme/`** 下 Web / 技能冒烟 **SVG 示意图**（可替换为 PNG）；`README_cn` / `README_en` 增加指向说明。
+- 文档：首页 **维护者自测环境表** + **`docs/readme/`** 截图（PNG，**约 900px 宽 / ~370 KB 合计**，便于 GitHub 快速加载）；`README_cn` / `README_en` 有指向说明。
 - 文档：`skill-readme.md` 重命名为 **`Skills_README.md`**，并增加 **manifest 技能一览表**（名称、功能、路径）。
 
 ### 新增

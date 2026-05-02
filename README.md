@@ -47,28 +47,27 @@
 | Item · 项目 | Reference · 参考配置 |
 |---------------|----------------------|
 | **Hardware · 硬件** | Apple MacBook Pro（M4 Max 12性能和4能效），统一内存 **128GB**（更大上下文与本地 STT 更从容） |
-| **OS · 系统** | **macOS** macSo Tahoe 26.4.1 (25E253) |
+| **OS · 系统** | **macOS** Tahoe 26.4.1 (25E253) |
 | **Python** | **3.12**，项目虚拟环境 **`.venv`**（`./bootstrap.sh`） |
 | **Inference · 推理** |  本机 oMLX + Qwen3.5-35B-A3B-8bit 搭建 **OpenAI 兼容** HTTP API（示例：`OI_API_BASE=http://127.0.0.1:<port>/v1`，`OI_MODEL` 与上游 `/v1/models` 中 id 一致） |
 | **Optional · 可选** | **PyMuPDF**（PDF）、**mlx-whisper**（Apple Silicon 本地转写）、**SearXNG / 网关**（`web_search`）、样例 PDF/图/音视频路径用于冒烟 |
 
 ### Screenshots · 技能与界面示意
 
-**EN** · Wireframe-style illustrations ship in-repo so the README renders on first clone. Swap them for **real PNG screenshots** anytime (same filenames under `docs/readme/`, e.g. `screenshot-web-ui.png`).
+**EN** · PNGs in `docs/readme/` are **resampled to ~900px width** (~160–210 KB each) for faster GitHub README loads. Replace the files when you update captures—keep the same names.
 
-**中文** · 以下为仓库内置的 **SVG 线框示意图**（克隆即可在 GitHub 上正常显示）。你可随时用本机 **PNG 截图** 覆盖同路径文件名（如 `screenshot-web-ui.png`），便于展示真实 UI 与冒烟结果。
+**中文** · 截图已 **横向缩放到约 900 像素**（单张约一百多～两百 KB），减轻 GitHub 项目页加载。更新截图时请仍覆盖同名 PNG。
 
 <p align="center">
-  <b>Web UI · 会话与执行流（示意）</b><br/>
-  <img src="docs/readme/screenshot-web-ui.png" alt="Web UI wireframe" width="720" />
+  <b>Web UI · 会话与执行流</b><br/>
+  <img src="docs/readme/screenshot-web-ui.png" alt="Web UI screenshot" width="720" loading="lazy" decoding="async" />
 </p>
 
 <p align="center">
-  <b>Skills smoke · 全技能冒烟摘要（示意）</b><br/>
-  <img src="docs/readme/screenshot-skills-smoke.png" alt="Skills smoke terminal wireframe" width="720" />
+  <b>Skills smoke · 全技能冒烟摘要</b><br/>
+  <img src="docs/readme/screenshot-skills-smoke.png" alt="Skills smoke terminal screenshot" width="720" loading="lazy" decoding="async" />
 </p>
 
-<p align="center"><sub>EN: Save real PNGs under <code>docs/readme/</code> as <code>screenshot-web-ui.png</code> and <code>screenshot-skills-smoke.png</code>, then change the two image URLs above from <code>.svg</code> to <code>.png</code>. · 中文：将真实截图保存为上述两个 PNG 文件名，并把 README 里两处图片扩展名改为 <code>.png</code>。</sub></p>
 
 ---
 
