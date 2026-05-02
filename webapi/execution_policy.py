@@ -19,11 +19,20 @@ def check_command_policy(cmd: str, cwd: str, confirm_each: bool) -> tuple[bool, 
     if blocklist_re.search(s):
         return False, "命中系统级黑名单命令", False
 
+    allow_raw = (cfg.allowlist_pattern or "").strip()
+    if allow_raw:
+        allow_re = re.compile(allow_raw, re.IGNORECASE)
+        if not allow_re.search(s):
+            return False, "未命中允许执行的命令白名单（OMLXCLI_EXEC_ALLOWLIST_RE）", False
+
     abs_paths = [m.group(0) for m in _ABS_PATH_RE.finditer(s)]
     if cfg.enforce_workspace_boundary and mutating_re.search(s):
+        cwd_bound = os.path.realpath(os.path.abspath(cwd))
+        sep = os.sep
+        prefix = cwd_bound.rstrip(sep) + sep
         for p in abs_paths:
-            p_abs = os.path.abspath(p)
-            if not p_abs.startswith(cwd.rstrip("/") + "/") and p_abs != cwd:
+            p_abs = os.path.realpath(os.path.abspath(p))
+            if not (p_abs == cwd_bound or p_abs.startswith(prefix)):
                 return False, f"写操作路径越界：{p}", False
 
     if confirm_each and high_risk_re.search(s):

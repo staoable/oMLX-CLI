@@ -5,7 +5,8 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "${ROOT}"
 
 # 自动加载项目环境变量（若存在）
-# 支持 .env 与 .env.local；后者可覆盖前者。
+# 支持 .env 与 .env.local；后者覆盖前者中同名键（与 webapi/dotenv_loader 语义一致）。
+# 直接 uvicorn 未走本脚本时，import webapi.app 也会加载上述文件。
 for env_file in "${ROOT}/.env" "${ROOT}/.env.local"; do
   if [[ -f "${env_file}" ]]; then
     set -a

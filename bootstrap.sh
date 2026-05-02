@@ -20,9 +20,16 @@ VENV_PY="${ROOT}/.venv/bin/python"
 echo "升级 pip..."
 "${VENV_PY}" -m pip install --upgrade pip
 
-echo "安装运行与测试依赖..."
-"${VENV_PY}" -m pip install fastapi uvicorn pydantic httpx
+echo "安装运行与测试依赖（见 requirements.txt，含 Playwright 供本地 E2E）..."
+"${VENV_PY}" -m pip install -r "${ROOT}/requirements.txt"
+
+if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
+  echo "（Apple Silicon）已按 requirements.txt 条件安装 mlx-whisper；音频/视频音轨 STT 可用。"
+else
+  echo "（非 Apple Silicon）未自动安装 mlx-whisper；音频转写类技能需 Apple Silicon macOS 或自行查阅 MLX 支持矩阵。"
+fi
 
 echo "环境初始化完成。可执行："
 echo "  ./start_web.sh"
-echo "  ./.venv/bin/python -m unittest discover -s tests -p \"test_*.py\""
+echo "  ./scripts/dev_check.sh"
+echo "  （首次跑 Playwright E2E 前）${VENV_PY} -m playwright install chromium"

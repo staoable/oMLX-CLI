@@ -1,0 +1,97 @@
+[
+  {
+    "name": "blocklist_echo",
+    "cmd": "echo hi",
+    "confirm_each": false,
+    "env": { "OMLXCLI_EXEC_BLOCKLIST_RE": "\\b(echo)\\b" },
+    "expect_ok": false
+  },
+  {
+    "name": "allow_echo_default",
+    "cmd": "echo hi",
+    "confirm_each": false,
+    "env": {},
+    "expect_ok": true,
+    "expect_confirm": false
+  },
+  {
+    "name": "sudo_need_confirm",
+    "cmd": "sudo ls /",
+    "confirm_each": true,
+    "env": {},
+    "expect_ok": true,
+    "expect_confirm": true
+  },
+  {
+    "name": "allowlist_git_only_blocks_ls",
+    "cmd": "ls -la",
+    "confirm_each": false,
+    "env": { "OMLXCLI_EXEC_ALLOWLIST_RE": "\\b(git)\\b" },
+    "expect_ok": false
+  },
+  {
+    "name": "allowlist_git_only_allows_status",
+    "cmd": "git status",
+    "confirm_each": false,
+    "env": { "OMLXCLI_EXEC_ALLOWLIST_RE": "\\b(git)\\b" },
+    "expect_ok": true
+  },
+  {
+    "name": "touch_absolute_outside_workspace",
+    "cmd": "touch /tmp/_omlxcli_policy_abs_path_test",
+    "confirm_each": false,
+    "env": {},
+    "expect_ok": false
+  },
+  {
+    "name": "empty_command",
+    "cmd": "",
+    "confirm_each": false,
+    "env": {},
+    "expect_ok": false
+  },
+  {
+    "name": "whitespace_only_command",
+    "cmd": "   ",
+    "confirm_each": false,
+    "env": {},
+    "expect_ok": false
+  },
+  {
+    "name": "blocklist_default_mkfs",
+    "cmd": "mkfs -t ext4 /dev/sdb1",
+    "confirm_each": false,
+    "env": {},
+    "expect_ok": false
+  },
+  {
+    "name": "rm_rf_absolute_outside_workspace",
+    "cmd": "rm -rf /tmp/_omlxcli_policy_rm_outside",
+    "confirm_each": false,
+    "env": {},
+    "expect_ok": false
+  },
+  {
+    "name": "touch_inside_workspace_via_placeholder",
+    "cmd": "touch __CWD__/policy_eval_in_workspace_marker",
+    "confirm_each": false,
+    "env": {},
+    "expect_ok": true
+  },
+  {
+    "name": "chmod_high_risk_need_confirm",
+    "cmd": "chmod 777 __CWD__/x",
+    "confirm_each": true,
+    "env": {},
+    "expect_ok": true,
+    "expect_confirm": true
+  },
+  {
+    "name": "rm_rf_relative_no_abs_paths_allowed",
+    "cmd": "rm -rf build",
+    "confirm_each": false,
+    "env": {},
+    "expect_ok": true,
+    "expect_confirm": false
+  }
+]

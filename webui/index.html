@@ -23,6 +23,10 @@
         </button>
         <div class="sidebar__section-label">近期会话</div>
         <div id="sessionList" class="session-list" role="list"></div>
+        <label class="sidebar__archived-filter">
+          <input id="includeArchivedSessions" type="checkbox" />
+          <span>显示已归档会话</span>
+        </label>
       </aside>
 
       <div class="main">
@@ -159,6 +163,10 @@
               <label class="toggle-row">
                 <input id="confirmEachInput" type="checkbox" checked />
                 <span>风险命令确认</span>
+              </label>
+              <label class="toggle-row">
+                <input id="sessionArchivedInput" type="checkbox" />
+                <span>归档此会话（侧栏默认隐藏，可在下方勾选「显示已归档」）</span>
               </label>
             </div>
           </section>

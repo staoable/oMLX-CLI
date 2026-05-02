@@ -1,4 +1,10 @@
-import { DEFAULT_MODEL, SIDEBAR_STORAGE_KEY, state, el } from "/ui/core/state.js";
+import {
+  DEFAULT_MODEL,
+  SIDEBAR_STORAGE_KEY,
+  ARCHIVED_SESSIONS_KEY,
+  state,
+  el,
+} from "/ui/core/state.js";
 import { api, fetchModelsForBase } from "/ui/core/api.js";
 import { escapeHtml, renderMarkdown, renderMetricsFooter, enhanceCodeBlocks } from "/ui/core/markdown.js";
 import { readSseEvents } from "/ui/core/stream.js";
@@ -213,7 +219,13 @@ function beginAssistantStream() {
     <div class="message__avatar" aria-hidden="true">AI</div>
     <div class="message__bubble">
       <div class="markdown-body"><p class="thread-empty" style="padding:0;margin:0;font-size:14px;">正在输入…</p></div>
-      <div class="exec-steps"></div>
+      <details class="exec-timeline" open>
+        <summary class="exec-timeline__summary">
+          <span class="exec-timeline__title">执行时间线</span>
+          <span class="exec-timeline__hint">展开 / 折叠</span>
+        </summary>
+        <div class="exec-steps"></div>
+      </details>
     </div>
   `;
   el("chatList").appendChild(article);
@@ -250,6 +262,17 @@ function removeStreamingPlaceholder() {
   state.streamingStepsEl = null;
 }
 
+function appendTraceRow(ev) {
+  if (!state.streamingStepsEl) return;
+  const div = document.createElement("div");
+  div.className = "exec-trace-row";
+  const action = String(ev.action || "trace");
+  const tid = ev.turn_id ? String(ev.turn_id).slice(0, 12) : "";
+  div.textContent = `[agent_trace] ${action}${tid ? " · " + tid : ""}`;
+  state.streamingStepsEl.appendChild(div);
+  scrollChatToBottom();
+}
+
 function appendExecStep(step) {
   if (!state.streamingStepsEl) return;
   const div = document.createElement("div");
@@ -276,7 +299,10 @@ function renderSessions() {
   list.innerHTML = "";
   state.sessions.forEach((s) => {
     const row = document.createElement("div");
-    row.className = "session-row" + (s.id === state.currentSessionId ? " active" : "");
+    row.className =
+      "session-row" +
+      (s.id === state.currentSessionId ? " active" : "") +
+      (s.archived ? " session-row--archived" : "");
     row.setAttribute("role", "listitem");
 
     const main = document.createElement("button");
@@ -409,7 +435,12 @@ function addFiles(files) {
 }
 
 async function loadSessions() {
-  state.sessions = await api("/api/sessions");
+  const q = state.includeArchivedSessions ? "?include_archived=1" : "";
+  state.sessions = await api(`/api/sessions${q}`);
+  const ids = new Set(state.sessions.map((s) => s.id));
+  if (state.currentSessionId && !ids.has(state.currentSessionId)) {
+    state.currentSessionId = null;
+  }
   renderSessions();
   if (!state.currentSessionId && state.sessions.length > 0) {
     await selectSession(state.sessions[0].id);
@@ -451,6 +482,8 @@ async function selectSession(sessionId) {
   el("workspacePathInput").value = data.workspace_path || "";
   el("executionEnabledInput").checked = Boolean(data.execution_enabled);
   el("confirmEachInput").checked = data.confirm_each !== false;
+  const arch = el("sessionArchivedInput");
+  if (arch) arch.checked = Boolean(data.archived);
   try {
     const remote = await fetchModelsForBase(data.api_base);
     fillModelSelect(remote.models || [], data.model);
@@ -494,6 +527,7 @@ async function saveSessionConfig() {
       workspace_path: el("workspacePathInput").value.trim(),
       execution_enabled: el("executionEnabledInput").checked,
       confirm_each: el("confirmEachInput").checked,
+      archived: el("sessionArchivedInput")?.checked ?? false,
     }),
   });
   // 立即回显后端规范化后的值（绝对路径），避免用户误判“未保存”
@@ -626,6 +660,8 @@ async function sendMessage() {
         updateStreamingMarkdown(state.assistantBuffer);
       } else if (eventType === "exec_step" || eventType === "exec_result") {
         appendExecStep({ ...parsed, type: eventType });
+      } else if (eventType === "agent_trace") {
+        appendTraceRow(parsed);
       } else if (eventType === "require_confirm") {
         openConfirmModal(parsed.command || "", parsed.reason || "");
       } else if (eventType === "metrics") {
@@ -787,4 +823,13 @@ document.addEventListener("drop", (e) => {
 
 initSidebar();
 updateTitleControls();
+const archivedToggle = el("includeArchivedSessions");
+if (archivedToggle) {
+  archivedToggle.checked = state.includeArchivedSessions;
+  archivedToggle.addEventListener("change", () => {
+    state.includeArchivedSessions = archivedToggle.checked;
+    localStorage.setItem(ARCHIVED_SESSIONS_KEY, archivedToggle.checked ? "1" : "0");
+    loadSessions();
+  });
+}
 loadSessions();

@@ -3,7 +3,8 @@
 数据源策略：
   - 主：Open-Meteo 公共 API（无需 key）。先经 geocoding 把城市名转坐标，再取
     current/daily 预报；中文返回 weather_code 映射成中文天气描述。
-  - 兜底：wttr.in 文本气象服务（也无需 key）。当主源对城市名解析失败时启用。
+  - 兜底：wttr.in（无需 key）。`weather_now` 在主源失败时用；`weather_forecast`
+    在主源任一步失败（含 forecast 502 等）时用 j1 的 `weather` 多日块（通常约 3 天）。
 
 设计取舍：
   - geocoding 对长查询（如「广州番禺」）可能命中失败。我们采用"原串 → 末尾分词"
@@ -15,6 +16,8 @@ from __future__ import annotations
 
 import json
 import re
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Optional
@@ -59,10 +62,19 @@ _WEATHER_CODE_ZH: dict[int, str] = {
 }
 
 
-def _http_get_json(url: str, timeout: float = 8.0) -> dict[str, Any]:
+def _http_get_json(url: str, timeout: float = 8.0, retries: int = 2) -> dict[str, Any]:
+    """GET JSON；对 502/503/504 做有限重试（Open-Meteo 偶发网关错误）。"""
     req = urllib.request.Request(url, headers={"User-Agent": "aicli-weather/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as exc:
+            if exc.code in (502, 503, 504) and attempt < retries:
+                time.sleep(0.35 * (attempt + 1))
+                continue
+            raise
+    assert False, "unreachable"  # pragma: no cover
 
 
 def _weather_desc(code: Optional[int]) -> str:
@@ -153,6 +165,99 @@ def _open_meteo_forecast(lat: float, lon: float, days: int = 1) -> dict[str, Any
 def _wttr_fallback(query: str) -> dict[str, Any]:
     """wttr.in 兜底；接受中文/拼音/英文城市名。"""
     return _http_get_json(_WTTR_URL.format(q=urllib.parse.quote(query)))
+
+
+def _wttr_day_condition_zh(day: dict[str, Any]) -> str:
+    """从 wttr.in j1 单日块取中文概况（取中间时刻 hourly）。"""
+    hourly = day.get("hourly") or []
+    if not hourly:
+        return "未知"
+    mid = hourly[len(hourly) // 2]
+    lz = mid.get("lang_zh")
+    if isinstance(lz, list) and lz and isinstance(lz[0], dict):
+        v = lz[0].get("value")
+        if v:
+            return str(v).strip()
+    wd = mid.get("weatherDesc")
+    if isinstance(wd, list) and wd and isinstance(wd[0], dict):
+        v = wd[0].get("value")
+        if v:
+            return str(v).strip()
+    return "未知"
+
+
+def _wttr_format_forecast(query: str, days: int) -> dict[str, Any]:
+    """wttr.in 多日预报（j1 默认约 3 天）；与 open-meteo 返回字段尽量对齐。"""
+    data = _wttr_fallback(query)
+    nearest = (data.get("nearest_area") or [{}])[0]
+    area = ((nearest.get("areaName") or [{}])[0] or {}).get("value") or query
+    region = ((nearest.get("region") or [{}])[0] or {}).get("value") or ""
+    country = ((nearest.get("country") or [{}])[0] or {}).get("value") or ""
+    lat_s, lon_s = nearest.get("latitude"), nearest.get("longitude")
+    lat: float | None = None
+    lon: float | None = None
+    try:
+        if lat_s not in (None, ""):
+            lat = float(lat_s)
+        if lon_s not in (None, ""):
+            lon = float(lon_s)
+    except (TypeError, ValueError):
+        lat = lon = None
+
+    weather_days = data.get("weather") or []
+    if not weather_days:
+        raise RuntimeError("wttr.in 未返回 weather 预报块")
+
+    n = max(1, min(int(days), len(weather_days), 7))
+    daily: list[dict[str, Any]] = []
+    for i in range(n):
+        d = weather_days[i]
+        hourly = d.get("hourly") or []
+        code: int | None = None
+        if hourly:
+            mid = hourly[len(hourly) // 2]
+            try:
+                raw_c = mid.get("weatherCode")
+                code = int(raw_c) if raw_c not in (None, "") else None
+            except (TypeError, ValueError):
+                code = None
+        precip_sum = 0.0
+        wind_max = 0.0
+        for h in hourly:
+            try:
+                precip_sum += float(h.get("precipMM") or 0) or 0.0
+            except (TypeError, ValueError):
+                pass
+            try:
+                w = float(h.get("windspeedKmph") or 0) or 0.0
+                wind_max = max(wind_max, w)
+            except (TypeError, ValueError):
+                pass
+        astro = (d.get("astronomy") or [{}])[0] if d.get("astronomy") else {}
+        daily.append(
+            {
+                "date": d.get("date"),
+                "weather_code": code,
+                "condition": _wttr_day_condition_zh(d),
+                "temp_max_c": _to_float(d.get("maxtempC")),
+                "temp_min_c": _to_float(d.get("mintempC")),
+                "precipitation_mm": precip_sum or None,
+                "wind_max_kmh": wind_max or None,
+                "sunrise": astro.get("sunrise"),
+                "sunset": astro.get("sunset"),
+            }
+        )
+
+    return {
+        "source": "wttr.in",
+        "city": area,
+        "admin": region,
+        "country": country,
+        "latitude": lat,
+        "longitude": lon,
+        "timezone": None,
+        "daily": daily,
+    }
 
 
 def _wttr_format_now(query: str) -> dict[str, Any]:
@@ -258,44 +363,55 @@ def weather_forecast(city: str, days: int = 3) -> dict[str, Any]:
         raise ValueError("city 不能为空")
     days = max(1, min(int(days), 7))
 
-    loc = _geocode(city)
-    lat = float(loc["latitude"])
-    lon = float(loc["longitude"])
-    forecast = _open_meteo_forecast(lat, lon, days=days)
-    daily = forecast.get("daily") or {}
-    times = daily.get("time") or []
-    codes = daily.get("weather_code") or []
-    tmaxs = daily.get("temperature_2m_max") or []
-    tmins = daily.get("temperature_2m_min") or []
-    precs = daily.get("precipitation_sum") or []
-    winds = daily.get("wind_speed_10m_max") or []
-    sunrises = daily.get("sunrise") or []
-    sunsets = daily.get("sunset") or []
+    primary_err: Exception | None = None
+    try:
+        loc = _geocode(city)
+        lat = float(loc["latitude"])
+        lon = float(loc["longitude"])
+        forecast = _open_meteo_forecast(lat, lon, days=days)
+        daily = forecast.get("daily") or {}
+        times = daily.get("time") or []
+        codes = daily.get("weather_code") or []
+        tmaxs = daily.get("temperature_2m_max") or []
+        tmins = daily.get("temperature_2m_min") or []
+        precs = daily.get("precipitation_sum") or []
+        winds = daily.get("wind_speed_10m_max") or []
+        sunrises = daily.get("sunrise") or []
+        sunsets = daily.get("sunset") or []
 
-    result: list[dict[str, Any]] = []
-    for i, t in enumerate(times):
-        code = codes[i] if i < len(codes) else None
-        result.append(
-            {
-                "date": t,
-                "weather_code": code,
-                "condition": _weather_desc(code),
-                "temp_max_c": tmaxs[i] if i < len(tmaxs) else None,
-                "temp_min_c": tmins[i] if i < len(tmins) else None,
-                "precipitation_mm": precs[i] if i < len(precs) else None,
-                "wind_max_kmh": winds[i] if i < len(winds) else None,
-                "sunrise": sunrises[i] if i < len(sunrises) else None,
-                "sunset": sunsets[i] if i < len(sunsets) else None,
-            }
-        )
+        result: list[dict[str, Any]] = []
+        for i, t in enumerate(times):
+            code = codes[i] if i < len(codes) else None
+            result.append(
+                {
+                    "date": t,
+                    "weather_code": code,
+                    "condition": _weather_desc(code),
+                    "temp_max_c": tmaxs[i] if i < len(tmaxs) else None,
+                    "temp_min_c": tmins[i] if i < len(tmins) else None,
+                    "precipitation_mm": precs[i] if i < len(precs) else None,
+                    "wind_max_kmh": winds[i] if i < len(winds) else None,
+                    "sunrise": sunrises[i] if i < len(sunrises) else None,
+                    "sunset": sunsets[i] if i < len(sunsets) else None,
+                }
+            )
 
-    return {
-        "source": "open-meteo",
-        "city": loc.get("name") or city,
-        "admin": loc.get("admin1") or loc.get("admin2") or "",
-        "country": loc.get("country") or "",
-        "latitude": lat,
-        "longitude": lon,
-        "timezone": forecast.get("timezone"),
-        "daily": result,
-    }
+        return {
+            "source": "open-meteo",
+            "city": loc.get("name") or city,
+            "admin": loc.get("admin1") or loc.get("admin2") or "",
+            "country": loc.get("country") or "",
+            "latitude": lat,
+            "longitude": lon,
+            "timezone": forecast.get("timezone"),
+            "daily": result,
+        }
+    except Exception as exc:  # noqa: BLE001
+        primary_err = exc
+
+    try:
+        return _wttr_format_forecast(city, days)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"天气预报失败: open-meteo={primary_err}; wttr.in={exc}"
+        ) from exc

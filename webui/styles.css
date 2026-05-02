@@ -2,7 +2,10 @@
    oMLX CLI — 暗色聊天布局
    -------------------------------------------------------------------------- */
 
+/* Design tokens：间距/圆角等可集中在此扩展；业务色保持与现有暗色主题一致 */
 :root {
+  --timeline-bg: rgba(255, 255, 255, 0.035);
+  --timeline-border: rgba(255, 255, 255, 0.1);
   --bg-app: #0a0a0b;
   --bg-sidebar: #111113;
   --bg-elevated: #18181b;
@@ -157,6 +160,25 @@ body {
 .session-row.active {
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.session-row--archived .session-title {
+  opacity: 0.72;
+}
+
+.sidebar__archived-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.sidebar__archived-filter input {
+  accent-color: var(--accent);
 }
 
 .session-main {
@@ -886,6 +908,54 @@ body {
   margin-top: 6px;
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
+}
+
+.exec-timeline {
+  margin-top: 10px;
+  border: 1px solid var(--timeline-border);
+  border-radius: var(--radius-md);
+  background: var(--timeline-bg);
+  padding: 0 8px 8px;
+}
+
+.exec-timeline__summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.exec-timeline__summary::-webkit-details-marker {
+  display: none;
+}
+
+.exec-timeline__title {
+  font-weight: 600;
+}
+
+.exec-timeline__hint {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 11px;
+}
+
+.exec-timeline .exec-steps {
+  margin-top: 4px;
+}
+
+.exec-trace-row {
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Markdown body (chat content) */

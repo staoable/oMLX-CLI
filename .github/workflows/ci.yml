@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright Chromium (E2E)
+        run: python -m playwright install --with-deps chromium
+
+      - name: OI_TOOL_MAP consistency
+        run: python scripts/gen_oi_tool_map.py --check
+
+      - name: Unit tests + Playwright E2E
+        env:
+          OMLXCLI_EVAL_SKIP_HTTP: "1"
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: HTTP smoke (uvicorn + smoke_http)
+        env:
+          OMLXCLI_DATA_DIR: /tmp/omlxci_web_data
+          OMLXCLI_DEFAULT_WORKSPACE: ${{ github.workspace }}
+        run: |
+          python -m uvicorn webapi.app:app --host 127.0.0.1 --port 19999 &
+          PID=$!
+          sleep 3
+          python scripts/smoke_http.py http://127.0.0.1:19999
+          kill "$PID" || true

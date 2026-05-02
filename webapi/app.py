@@ -10,6 +10,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from webapi.dotenv_loader import load_dotenv_files
+
+_ROOT_FOR_ENV = Path(__file__).resolve().parent.parent
+load_dotenv_files(_ROOT_FOR_ENV)
+
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -22,7 +27,7 @@ from webapi.session_engine import OiSessionEngine
 from webapi.session_store import SessionStore
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = _ROOT_FOR_ENV
 WEBUI_DIR = ROOT / "webui"
 APP_NAME = "oMLX CLI"
 DATA_DIR = Path(os.getenv("OMLXCLI_DATA_DIR", str(ROOT / ".omlxcli" / "web")))
@@ -35,7 +40,7 @@ store = SessionStore(str(DB_PATH))
 ctx = ContextManager(store)
 engine = OiSessionEngine(store, ctx)
 
-app = FastAPI(title=APP_NAME, version="0.1.0")
+app = FastAPI(title=APP_NAME, version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -121,6 +126,7 @@ class UpdateSessionReq(BaseModel):
     auto_run: bool | None = None
     execution_enabled: bool | None = None
     confirm_each: bool | None = None
+    archived: bool | None = None
 
 
 class SendMessageReq(BaseModel):
@@ -131,6 +137,7 @@ class SendMessageReq(BaseModel):
 
 class ContextReq(BaseModel):
     content: str
+    priority: int = Field(default=0, ge=-1000, le=1000)
 
 
 class CheckpointReq(BaseModel):
@@ -139,6 +146,15 @@ class CheckpointReq(BaseModel):
 
 class ResumeReq(BaseModel):
     checkpoint_id: str
+    mode: str = Field(
+        default="append",
+        description="append：在现有 working 上追加；replace：先清空 working 再恢复",
+    )
+
+
+class BatchArchiveSessionsReq(BaseModel):
+    session_ids: list[str] = Field(default_factory=list)
+    archived: bool = True
 
 
 class ConfirmCommandReq(BaseModel):
@@ -178,8 +194,9 @@ def list_models(
         headers={"Authorization": f"Bearer {key}"},
         method="GET",
     )
+    models_timeout = int(os.getenv("OMLXCLI_MODELS_LIST_TIMEOUT_SEC", "8"))
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with urllib.request.urlopen(req, timeout=models_timeout) as resp:
             raw = json.loads(resp.read().decode("utf-8", errors="ignore"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="ignore")[:500]
@@ -219,8 +236,10 @@ def create_session(req: CreateSessionReq) -> dict[str, Any]:
 
 
 @app.get("/api/sessions")
-def list_sessions() -> list[dict[str, Any]]:
-    return [asdict(s) for s in store.list_sessions()]
+def list_sessions(
+    include_archived: int = Query(default=0, ge=0, le=1),
+) -> list[dict[str, Any]]:
+    return [asdict(s) for s in store.list_sessions(include_archived=bool(include_archived))]
 
 
 @app.get("/api/sessions/{session_id}")
@@ -257,6 +276,22 @@ def update_session(session_id: str, req: UpdateSessionReq) -> dict[str, Any]:
 def delete_session(session_id: str) -> dict[str, str]:
     store.delete_session(session_id)
     return {"status": "ok"}
+
+
+@app.post("/api/sessions/batch-archive")
+def batch_archive_sessions(req: BatchArchiveSessionsReq) -> dict[str, Any]:
+    """批量归档或取消归档会话（第 1 节：会话生命周期治理）。"""
+    updated = 0
+    for sid in req.session_ids[:500]:
+        s = (sid or "").strip()
+        if not s:
+            continue
+        try:
+            store.update_session(s, archived=req.archived)
+            updated += 1
+        except KeyError:
+            continue
+    return {"status": "ok", "updated": updated}
 
 
 @app.post("/api/sessions/{session_id}/messages")
@@ -331,14 +366,62 @@ def list_context_injections(
     return store.list_context_injections(session_id, limit=limit)
 
 
+@app.get("/api/sessions/{session_id}/agent-trace")
+def list_agent_trace(
+    session_id: str,
+    turn_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[dict[str, Any]]:
+    try:
+        _ = store.get_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return store.list_agent_trace(session_id, turn_id=turn_id, limit=limit)
+
+
+@app.get("/api/admin/sessions/{session_id}/audit-export")
+def admin_audit_export(session_id: str, request: Request) -> dict[str, Any]:
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    admin_token = os.getenv("OMLXCLI_ADMIN_TOKEN", "").strip()
+    if not admin_token:
+        raise HTTPException(
+            status_code=501,
+            detail=_error_payload(
+                code="ADMIN_NOT_CONFIGURED",
+                message="未配置 OMLXCLI_ADMIN_TOKEN，无法导出审计包。",
+                request_id=request_id,
+            ),
+        )
+    if (request.headers.get("x-admin-token") or "").strip() != admin_token:
+        raise HTTPException(
+            status_code=403,
+            detail=_error_payload(
+                code="FORBIDDEN",
+                message="管理员令牌无效。",
+                request_id=request_id,
+            ),
+        )
+    try:
+        session = store.get_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "session": asdict(session),
+        "messages": store.list_messages(session_id, limit=400),
+        "executions": store.list_executions(session_id, limit=500),
+        "context_injections": store.list_context_injections(session_id, limit=300),
+        "agent_trace": store.list_agent_trace(session_id, limit=500),
+    }
+
+
 @app.post("/api/sessions/{session_id}/context/pin")
 def pin_context(session_id: str, req: ContextReq) -> dict[str, Any]:
-    return ctx.add_pinned(session_id, req.content)
+    return ctx.add_pinned(session_id, req.content, priority=req.priority)
 
 
 @app.post("/api/sessions/{session_id}/context/working")
 def add_working_context(session_id: str, req: ContextReq) -> dict[str, Any]:
-    return ctx.add_working(session_id, req.content)
+    return ctx.add_working(session_id, req.content, priority=req.priority)
 
 
 @app.post("/api/sessions/{session_id}/context/checkpoint")
@@ -349,10 +432,17 @@ def create_checkpoint(session_id: str, req: CheckpointReq) -> dict[str, Any]:
 
 @app.post("/api/sessions/{session_id}/resume")
 def resume_checkpoint(session_id: str, req: ResumeReq) -> dict[str, Any]:
+    mode = (req.mode or "append").strip().lower()
+    if mode not in ("append", "replace"):
+        raise HTTPException(status_code=400, detail="mode 必须是 append 或 replace")
     try:
-        checkpoint = ctx.restore_from_checkpoint(session_id, req.checkpoint_id)
+        checkpoint = ctx.restore_from_checkpoint(
+            session_id, req.checkpoint_id, mode=mode
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return checkpoint
 
 

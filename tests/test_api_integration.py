@@ -61,6 +61,25 @@ class ApiIntegrationTest(unittest.TestCase):
         deleted = self.client.delete(f"/api/sessions/{sid}")
         self.assertEqual(deleted.status_code, 200)
 
+    def test_session_archived_list_and_batch_archive(self) -> None:
+        a = self.client.post("/api/sessions", json={"title": "可见"}).json()["id"]
+        b = self.client.post("/api/sessions", json={"title": "归档"}).json()["id"]
+        self.client.patch(f"/api/sessions/{b}", json={"archived": True})
+        listed = self.client.get("/api/sessions").json()
+        self.assertTrue(all(not row.get("archived") for row in listed))
+        self.assertIn(a, {row["id"] for row in listed})
+        self.assertNotIn(b, {row["id"] for row in listed})
+        with_arch = self.client.get("/api/sessions?include_archived=1").json()
+        self.assertIn(b, {row["id"] for row in with_arch})
+        batch = self.client.post(
+            "/api/sessions/batch-archive",
+            json={"session_ids": [b], "archived": False},
+        )
+        self.assertEqual(batch.status_code, 200)
+        self.assertGreaterEqual(batch.json().get("updated", 0), 1)
+        listed2 = self.client.get("/api/sessions").json()
+        self.assertIn(b, {row["id"] for row in listed2})
+
     def test_confirm_command_reject_records_execution(self) -> None:
         created = self.client.post("/api/sessions", json={"title": "命令拒绝测试"})
         sid = created.json()["id"]
@@ -124,6 +143,55 @@ class ApiIntegrationTest(unittest.TestCase):
                 os.environ.pop("OMLXCLI_EXEC_BLOCKLIST_RE", None)
             else:
                 os.environ["OMLXCLI_EXEC_BLOCKLIST_RE"] = old
+
+    def test_agent_trace_list_endpoint(self) -> None:
+        created = self.client.post("/api/sessions", json={"title": "trace 列表"})
+        sid = created.json()["id"]
+        self.app_module.store.add_agent_trace(
+            session_id=sid,
+            turn_id="turn-it",
+            step_index=0,
+            action_type="eval",
+            detail={"x": 1},
+        )
+        r = self.client.get(f"/api/sessions/{sid}/agent-trace?turn_id=turn-it&limit=10")
+        self.assertEqual(r.status_code, 200)
+        rows = r.json()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["action_type"], "eval")
+        self.assertEqual(rows[0]["detail"]["x"], 1)
+
+    def test_admin_audit_export_status_codes(self) -> None:
+        created = self.client.post("/api/sessions", json={"title": "审计导出"})
+        sid = created.json()["id"]
+        old_admin = os.environ.pop("OMLXCLI_ADMIN_TOKEN", None)
+        try:
+            r501 = self.client.get(f"/api/admin/sessions/{sid}/audit-export")
+            self.assertEqual(r501.status_code, 501)
+        finally:
+            if old_admin is not None:
+                os.environ["OMLXCLI_ADMIN_TOKEN"] = old_admin
+
+        os.environ["OMLXCLI_ADMIN_TOKEN"] = "integration-admin-token-xyz"
+        try:
+            r403 = self.client.get(
+                f"/api/admin/sessions/{sid}/audit-export",
+                headers={"x-admin-token": "wrong"},
+            )
+            self.assertEqual(r403.status_code, 403)
+            r200 = self.client.get(
+                f"/api/admin/sessions/{sid}/audit-export",
+                headers={"x-admin-token": "integration-admin-token-xyz"},
+            )
+            self.assertEqual(r200.status_code, 200)
+            body = r200.json()
+            self.assertIn("session", body)
+            self.assertIn("agent_trace", body)
+            self.assertIsInstance(body["agent_trace"], list)
+        finally:
+            os.environ.pop("OMLXCLI_ADMIN_TOKEN", None)
+            if old_admin is not None:
+                os.environ["OMLXCLI_ADMIN_TOKEN"] = old_admin
 
 
 if __name__ == "__main__":

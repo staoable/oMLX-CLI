@@ -1,12 +1,64 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, Generator, Iterable
+
+_RETRY_HTTP = frozenset({429, 502, 503, 504})
+
+
+def _chat_http_settings(timeout_override: int | None) -> tuple[int, int, float]:
+    t = int(os.getenv("OMLXCLI_CHAT_TIMEOUT_SEC", "120")) if timeout_override is None else int(timeout_override)
+    retries = max(0, min(int(os.getenv("OMLXCLI_CHAT_HTTP_RETRIES", "2")), 8))
+    backoff = float(os.getenv("OMLXCLI_CHAT_RETRY_BACKOFF_SEC", "0.5"))
+    return t, retries, backoff
+
+
+def _model_chain(primary: str) -> list[str]:
+    raw = (os.getenv("OMLXCLI_MODEL_FALLBACKS") or "").strip()
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in [primary] + [x.strip() for x in raw.split(",") if x.strip()]:
+        if m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
+
+
+def _urlopen_with_retries(
+    req: urllib.request.Request,
+    *,
+    timeout: int,
+    max_retries: int,
+    backoff: float,
+) -> Any:
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            try:
+                exc.read()
+            except Exception:  # noqa: BLE001
+                pass
+            if exc.code in _RETRY_HTTP and attempt < max_retries:
+                time.sleep(backoff * (2**attempt))
+                continue
+            raise
+        except (TimeoutError, urllib.error.URLError, OSError, ConnectionResetError) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                time.sleep(backoff * (2**attempt))
+                continue
+            raise
+    raise RuntimeError("_urlopen_with_retries: exhausted without response")
 
 
 @dataclass(slots=True)
@@ -79,40 +131,56 @@ def stream_chat_completions(
     *,
     temperature: float = 0.2,
     max_tokens: int | None = None,
-    timeout: int = 120,
+    timeout: int | None = None,
 ) -> Generator[Dict[str, Any], None, None]:
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "stream": True,
-    }
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
+    t, max_retries, backoff = _chat_http_settings(timeout)
+    models = _model_chain(model)
+    last_model_exc: urllib.error.HTTPError | None = None
+    for m in models:
+        payload: Dict[str, Any] = {
+            "model": m,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
 
-    req = urllib.request.Request(
-        url=api_base.rstrip("/") + "/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        for raw in resp:
-            line = raw.decode("utf-8", errors="ignore").strip()
-            if not line.startswith("data: "):
-                continue
-            data = line[6:]
-            if data == "[DONE]":
-                break
+        req = urllib.request.Request(
+            url=api_base.rstrip("/") + "/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with _urlopen_with_retries(req, timeout=t, max_retries=max_retries, backoff=backoff) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", errors="ignore").strip()
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    yield obj
+            return
+        except urllib.error.HTTPError as exc:
             try:
-                obj = json.loads(data)
-            except json.JSONDecodeError:
+                exc.read()
+            except Exception:  # noqa: BLE001
+                pass
+            if exc.code == 404 and m != models[-1]:
+                last_model_exc = exc
                 continue
-            yield obj
+            raise
+    if last_model_exc:
+        raise last_model_exc
 
 
 def chat_completion_once(
@@ -123,26 +191,43 @@ def chat_completion_once(
     *,
     temperature: float = 0.2,
     max_tokens: int | None = None,
-    timeout: int = 120,
+    timeout: int | None = None,
 ) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "stream": False,
-    }
-    if max_tokens is not None:
-        payload["max_tokens"] = max_tokens
+    t, max_retries, backoff = _chat_http_settings(timeout)
+    models = _model_chain(model)
+    last_model_exc: urllib.error.HTTPError | None = None
+    for m in models:
+        payload: Dict[str, Any] = {
+            "model": m,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
 
-    req = urllib.request.Request(
-        url=api_base.rstrip("/") + "/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read().decode("utf-8", errors="ignore")
-    return json.loads(body)
+        req = urllib.request.Request(
+            url=api_base.rstrip("/") + "/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with _urlopen_with_retries(req, timeout=t, max_retries=max_retries, backoff=backoff) as resp:
+                body = resp.read().decode("utf-8", errors="ignore")
+            return json.loads(body)
+        except urllib.error.HTTPError as exc:
+            try:
+                exc.read()
+            except Exception:  # noqa: BLE001
+                pass
+            if exc.code == 404 and m != models[-1]:
+                last_model_exc = exc
+                continue
+            raise
+    if last_model_exc:
+        raise last_model_exc
+    raise RuntimeError("chat_completion_once: no model candidates")

@@ -304,11 +304,12 @@ def _import_mlx_whisper():
         raise RuntimeError(
             "本地 STT 缺包：未安装 `mlx-whisper`。\n"
             "原因：oMLX 0.3.x 的 /v1/audio/transcriptions 端点是占位（不实际处理音频），\n"
-            "本仓库改为用 Apple MLX 官方维护的本地 mlx-whisper。\n"
-            "修复：在 aicli 所在的 conda 环境里执行：\n"
-            "    conda run -n open-interpreter pip install mlx-whisper\n"
-            "或：\n"
-            "    /opt/homebrew/Caskroom/miniconda/base/envs/open-interpreter/bin/pip install mlx-whisper"
+            "本仓库改为用 Apple MLX 官方维护的本地 mlx-whisper（仅 Apple Silicon macOS 官方支持）。\n"
+            "修复（本仓库虚拟环境，推荐）：\n"
+            "    ./bootstrap.sh\n"
+            "    # 或：.venv/bin/python -m pip install -r requirements.txt\n"
+            "请确认运行 Web / run_skill 的 Python 与安装依赖的解释器一致（勿混用 conda base 与 .venv）。\n"
+            "若使用独立 conda 环境：conda run -n <env> pip install mlx-whisper"
         ) from exc
     return mlx_whisper
 

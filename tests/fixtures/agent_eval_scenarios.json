@@ -1,0 +1,180 @@
+[
+  {
+    "name": "skill_date_now",
+    "expr": "date_now()",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_manifest_reject_kwargs",
+    "expr": "date_now(**{})",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_note_list",
+    "expr": "note_list()",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_note_save_roundtrip",
+    "expr": "note_save('agent_eval_note', 'line1\\nline2')",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_note_load",
+    "expr": "note_load('agent_eval_note')",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_files_read_chunk",
+    "expr": "files_read_chunk('__ROOT__/README.md', start=0, lines=8)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_files_read_chunk_tail",
+    "expr": "files_read_chunk('__ROOT__/README.md', start=999999, lines=5)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_files_read_chunk_narrow",
+    "expr": "files_read_chunk('__ROOT__/README.md', start=0, lines=2)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_files_read_webapi_config_head",
+    "expr": "files_read_chunk('__ROOT__/webapi/config.py', start=0, lines=12)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_files_read_missing",
+    "expr": "files_read_chunk('__ROOT__/no_such_file_xyz_123.md', start=0, lines=5)",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_files_read_chunk_path_is_dir",
+    "expr": "files_read_chunk('__ROOT__', start=0, lines=1)",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_files_search_name",
+    "expr": "files_search('config.py', path='__ROOT__/webapi', kind='name', max_results=5)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_files_search_name_glob_readme",
+    "expr": "files_search('README.md', path='__ROOT__', kind='name', max_results=3)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_files_search_content",
+    "expr": "files_search('SessionStore', path='__ROOT__/webapi', kind='content', max_results=3)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_files_search_empty_query",
+    "expr": "files_search('', path='__ROOT__/webapi', kind='name', max_results=3)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_files_search_empty_query_content",
+    "expr": "files_search('', path='__ROOT__/webapi', kind='content', max_results=2)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_files_search_invalid_kind",
+    "expr": "files_search('x', path='__ROOT__/webapi', kind='bogus', max_results=2)",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_files_search_missing_dir",
+    "expr": "files_search('*.py', path='__ROOT__/no_such_dir_eval_999', kind='name', max_results=2)",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_files_search_no_hits",
+    "expr": "files_search('ZZZ_NO_MATCH_TOKEN_7f3a1c', path='__ROOT__/webapi', kind='content', max_results=2)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_repo_grep",
+    "expr": "repo_grep('class SessionStore', path='__ROOT__/webapi', max_matches=5)",
+    "expect_exit": 0,
+    "skip_if": "no_rg"
+  },
+  {
+    "name": "skill_repo_grep_fastapi",
+    "expr": "repo_grep('FastAPI', path='__ROOT__/webapi', max_matches=8)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_repo_grep_tests_module",
+    "expr": "repo_grep('test_agent_eval_scenarios', path='__ROOT__/tests', max_matches=5)",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_repo_grep_empty_pattern",
+    "expr": "repo_grep('', path='__ROOT__/webapi', max_matches=3)",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_repo_grep_whitespace_only_pattern",
+    "expr": "repo_grep('   ', path='__ROOT__/webapi', max_matches=3)",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_invalid_not_call",
+    "expr": "1 + 2",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_unknown_function",
+    "expr": "not_a_registered_skill_123()",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_note_load_missing",
+    "expr": "note_load('missing_note_eval_7a2f')",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_note_save_unicode",
+    "expr": "note_save('eval_unicode_note', '你好\\nline2')",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_note_load_unicode",
+    "expr": "note_load('eval_unicode_note')",
+    "expect_exit": 0
+  },
+  {
+    "name": "skill_note_save_insufficient_args",
+    "expr": "note_save('only_one_arg')",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_note_load_insufficient_args",
+    "expr": "note_load()",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_web_read_empty_url",
+    "expr": "web_read('', max_chars=400)",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_web_search_insufficient_args",
+    "expr": "web_search()",
+    "expect_exit": 1
+  },
+  {
+    "name": "skill_web_read_example_com",
+    "expr": "web_read('https://example.com', max_chars=400)",
+    "expect_exit": 0,
+    "skip_if": "needs_outbound_http"
+  },
+  {
+    "name": "skill_web_search_gateway",
+    "expr": "web_search('Python unittest', max_results=2, fetch_content=False)",
+    "expect_exit": 0,
+    "skip_if": "needs_gateway"
+  }
+]

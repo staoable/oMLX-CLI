@@ -10,21 +10,21 @@
 
 | 能力域 | 子能力 | 当前状态 | 差距说明 | 优先级 | 落地建议 |
 |---|---|---|---|---|---|
-| 模型接入 | OpenAI-compatible 文本对话 | 已实现 | 基础可用 | P0 | 保持稳定，增加重试与超时配置 |
-| 模型接入 | 多模型切换与会话级配置 | 已实现 | 缺少策略化默认模型 | P1 | 增加模型策略（首选/回退） |
-| 执行代理 | `run_shell` 多轮执行循环 | 已实现 | 缺少更细颗粒权限模型 | P0 | 增加命令白名单/工作区策略模板 |
-| 执行代理 | 高风险命令确认 | 已实现 | 规则可配置性不足 | P0 | 策略抽象为可配置策略集 |
-| 执行代理 | 命令审计与回放 | 部分实现 | 已有消息落库，缺结构化审计表 | P1 | 新增 `executions` 表记录命令、耗时、审批人 |
-| 工具能力 | `run_skill` 调用链 | 已实现 | 缺技能元数据治理与权限边界 | P0 | 加入技能 manifest + 参数校验 |
-| 工具能力 | oi 工具全集映射 | 未实现 | 仅覆盖本地 skills 子集 | P0 | 建立“能力映射表”，逐项实现 |
-| 会话系统 | 会话 CRUD、标题管理 | 已实现 | 基础能力完整 | P0 | 增加归档、批量管理 |
-| 上下文系统 | pinned/working/archived | 已实现 | 缺检索排序与冲突消解 | P0 | 引入检索评分 + 优先级合并 |
-| 上下文系统 | checkpoint 恢复 | 已实现 | 缺恢复策略（增量/覆盖） | P1 | 增加恢复模式参数 |
-| 上下文系统 | 长会话压缩策略 | 部分实现 | 仅轮次触发摘要，策略简单 | P0 | 引入 token 预算驱动压缩 |
+| 模型接入 | OpenAI-compatible 文本对话 | 已实现 | 已支持可配置 HTTP 超时/重试（`OMLXCLI_CHAT_TIMEOUT_SEC`、`OMLXCLI_CHAT_HTTP_RETRIES`、`OMLXCLI_CHAT_RETRY_BACKOFF_SEC`） | P0 | 可按上游 SLA 调参；熔断与配额治理仍可选 |
+| 模型接入 | 多模型切换与会话级配置 | 已实现 | 已支持回退链 `OMLXCLI_MODEL_FALLBACKS`（首选模型失败如 404 时依次尝试） | P1 | 可扩展为「按任务类型绑定模型」 |
+| 执行代理 | `run_shell` 多轮执行循环 | 已实现 | 模板 + 黑名单/高风险/越界；可选白名单 `OMLXCLI_EXEC_ALLOWLIST_RE` | P0 | 误杀解释与规则管理界面仍可选 |
+| 执行代理 | 高风险命令确认 | 已实现 | 策略由 `OMLXCLI_EXEC_*` 与模板组合配置 | P0 | 策略热更新与 UI 仍可选 |
+| 执行代理 | 命令审计与回放 | 已实现 | `executions` 落库；确认 API 路径写入 `metadata.approved_via` 等 | P1 | 可继续细化审批人身份（登录用户） |
+| 工具能力 | `run_skill` 调用链 | 已实现 | manifest + AST 参数校验 | P0 | 可按技能补充 JSON schema 级校验 |
+| 工具能力 | oi 工具全集映射 | 已实现 | **全集 = `.omlxcli/skills`**；`OI_TOOL_MAP.json` 的 `skills[]` 由 `scripts/gen_oi_tool_map.py` 生成；`tests/test_oi_tool_map_skills.py` 防漂移 | P0 | 新技能：manifest + `gen_oi_tool_map.py --write` + 可选 `agent_eval_scenarios` |
+| 会话系统 | 会话 CRUD、标题管理 | 已实现 | `archived` 字段、列表 `include_archived`、设置内归档、`POST /api/sessions/batch-archive` | P0 | 标签、保留策略仍可选 |
+| 上下文系统 | pinned/working/archived | 已实现 | `contexts.priority` 控制注入顺序（同层高优先、新记录优先） | P0 | 语义冲突消解仍可选 |
+| 上下文系统 | checkpoint 恢复 | 已实现 | `POST .../resume` 支持 `mode=append\|replace` | P1 | 可扩展 pinned 层恢复策略 |
+| 上下文系统 | 长会话压缩策略 | 已实现 | 估算上下文字符超 `OMLXCLI_CONTEXT_BUDGET_CHARS * OMLXCLI_SUMMARY_TRIGGER_RATIO` 时节流触发 checkpoint；`OMLXCLI_SUMMARY_MIN_MESSAGES_BETWEEN` 防抖 | P0 | 可接入真实 tokenizer 预算 |
 | 前端体验 | SSE 流式、Markdown、附件 | 已实现 | UI 体验未形成设计体系 | P1 | 建立 design token 与组件规范 |
-| 前端体验 | 执行流可视化 | 部分实现 | 缺 timeline、状态回看 | P1 | 增加任务时间线与细节抽屉 |
-| 可观测性 | 错误码、结构化日志 | 未实现 | 排障效率低 | P0 | 引入 request_id + error_code |
-| 质量保障 | 自动化测试 | 未实现 | 回归风险高 | P0 | 后端单测 + API 集成 + 前端 smoke |
+| 前端体验 | 执行流可视化 | 部分实现 | 流式消息内已支持可折叠「执行时间线」与 `agent_trace` 行；侧栏独立 timeline/抽屉与重试入口仍可选 | P1 | 增加侧栏任务视图与失败重试 |
+| 可观测性 | 错误码、结构化日志 | 已实现 | 主链路 `request_id`/`error_code` 与 JSON 日志（详见 `OI_CAPABILITY_MATRIX` 第 8 节） | P0 | 细化业务错误码字典与脱敏策略 |
+| 质量保障 | 自动化测试 | 部分实现 | CI：`requirements.txt`、`unittest`（含 Playwright `/ui/` 冒烟）、`gen_oi_tool_map --check`、`smoke_http`；发消息/确认流等深度 E2E 仍可选 | P0 | 按需扩展 Playwright 场景 |
 
 ## 2) Session / Context 目标方案（参考主流 Web 助理）
 
@@ -153,9 +153,68 @@
 - `验收`：可量化标准
 - `回滚`：失败时如何安全回退
 
-## 5) 下一步（建议立即执行）
+## 5) 当前推进（2～4 周可交付切片）
 
-1. 先完成 Week 1 的“oi 能力映射清单”（这是后续所有开发排序依据）。
-2. 并行推进 Week 2 的执行审计表设计（低风险高收益）。
-3. 进入 Week 3 前，先定义上下文预算指标（否则很难评估改造收益）。
+1. **文档与矩阵**：`README`、`OI_CAPABILITY_MATRIX.md`、本节 §1 与 CI 现状保持同步。
+2. **评测**：`agent_eval_scenarios.json`（skills，**35** 条）与 `policy_eval_scenarios.json`（执行策略，**13** 条）持续扩展；下一批优先「多步 shell / 会话内确认」类场景。
+3. **安全**：工作区写路径校验已用 `os.path.realpath` 缓解 **符号链接逃逸**（`webapi/execution_policy.py` + 单测）。
+4. **质量**：安装 `fastapi`+`httpx` 后本地可跑 `tests/test_api_integration.py`；CI 已装依赖故默认执行。
+5. **后续队列**：`run_skill` 超时与 JSON schema、语义检索、CHANGELOG、Playwright 最小 E2E（仍按 **第 6 节** P0→P1 排序）。
+
+## 6) 对标成熟 CLI Agent 的差距补齐路线图（P0 / P1 / P2）
+
+说明：本节与第 3 节六周里程碑互补——第 3 节偏「oi 对齐与工程化」，本节偏「与成熟 CLI Agent 产品形态对齐」。优先级含义同第 1 节。
+
+### P0（必须：可度量、可控制、可排障）
+
+| 方向 | 目标 | 落地建议 | 验收标准 |
+|---|---|---|---|
+| Agent 评测基线 | 有固定回归集，改代码不怕回退 | 建立 30～50 条真实任务集（含：纯对话、单步 shell、多步 shell、run_skill、联网搜索、失败重试）；每条标注期望行为（成功/拒绝/需确认） | CI 或本地一键跑完；通过率可统计；失败用例有稳定复现步骤 |
+| 工具调用卫生 | 少误调用、少参数幻觉 | run_skill 入参 schema 校验；明显非法路径/空 query 前置拒绝；失败返回可解析错误码 | 随机破坏性输入不导致进程崩溃；错误信息含 request_id / 技能名 |
+| 执行策略模板 | dev / readonly / prod-safe 可切换 | 将现有 policy 抽象为命名模板（环境变量或会话字段）；文档写明各模板允许的操作边界 | 同一任务在 readonly 下写盘被拦；在 dev 下可工作；切换无需改代码 |
+| 最小可观测 trace | 一轮内「决策→工具→结果」可回看 | 每轮落库或日志：用户输入摘要、选用的工具/命令、stdout/stderr 摘要、耗时、是否走确认 | 任意一轮可从 UI 或 API 拉出时间序列表；与现有 executions 不冲突 |
+
+### P1（重要：体验与鲁棒性接近「能日常干活」）
+
+| 方向 | 目标 | 落地建议 | 验收标准 |
+|---|---|---|---|
+| 任务鲁棒性 | 长任务可恢复、可重试 | 对多轮执行循环增加「步骤 id」、失败重试上限、幂等写检测；可选：会话级「任务检查点」 | 模拟中途网络错误后，用户可继续同一会话完成目标且不重复破坏写 |
+| 代码库理解 | 跨文件改动更靠谱 | 轻量索引：符号表 / ripgrep 封装 skill；或接入 LSP 只读查询（视投入） | 给定符号可列出定义与引用路径；大仓库下响应时间有上限（如 P95 < 3s） |
+| 联网与证据 | 回答可引用、可核对 | web_search 结果与最终回答的引用格式约定；敏感查询默认走网关 + 白名单 | 用户可见「来源链接列表」；无链接时模型明确说「未检索」而非编造 |
+| UI 任务视图 | 对齐「Agent 产品」心智 | 单会话内「当前任务」折叠面板：步骤条、每步状态、可展开日志 | 主对话区不被调试信息挤占；移动端可用 |
+
+### P2（增强：平台化与多 Agent）
+
+| 方向 | 目标 | 落地建议 | 验收标准 |
+|---|---|---|---|
+| 多 Agent 编排 | 规划 / 执行 / 审查分工 | 同一 session 内多角色 system 片段或子会话；审查 agent 只读工具 | 复杂任务（如「改代码 + 写测试 + 自检」）成功率高于单 Agent 基线（用本节 P0 评测集对比） |
+| 权限与审计企业级 | 多人、多环境、可追责 | RBAC、审批流、导出审计包；与 executions 对齐 | 非管理员无法关闭审计；导出包含 request_id 链路与策略版本号 |
+| 插件生态 | skills 可治理、可版本化 | manifest：版本、依赖、权限声明、changelog；可选签名或可信目录 | 新技能安装/升级不破坏旧会话；缺失依赖启动时明确报错 |
+
+### 与现有文档的关系
+
+- 能力逐项对照仍以 `OI_CAPABILITY_MATRIX.md` 为主。
+- 联网检索部署与对接细节以 `SearXNG.md` 与 `web_search` skill 为准。
+- 建议每完成一个 P0 子项，在评测集上跑一次并记录通过率变化，避免「感觉变强但不可测」。
+
+### 7) 本节已在仓库内落地的实现（持续扩展）
+
+| 路线图项 | 实现位置 |
+|---|---|
+| P0 评测基线（可扩展 JSON） | `tests/fixtures/agent_eval_scenarios.json`、`tests/fixtures/policy_eval_scenarios.json`、`tests/test_agent_maturity.py` |
+| P0 工具调用卫生 + P2 manifest | `.omlxcli/skills/manifests/skills.json`、`webapi/skill_manifest.py`、`webapi/skill_runner.py` |
+| P0 执行策略模板 | `webapi/config.py`（`OMLXCLI_EXEC_POLICY_TEMPLATE`） |
+| P0 最小 trace | `session_store` 表 `agent_trace`、`GET /api/sessions/{id}/agent-trace`、SSE 事件 `agent_trace`、`webui/app.js` |
+| P1 任务鲁棒（轮次上限） | `webapi/session_engine.py`（`OMLXCLI_MAX_EXEC_ROUNDS`） |
+| P1 代码库理解 | `.omlxcli/skills/repo_search.py`（`repo_grep`） |
+| P1 UI 任务轨迹（轻量） | 对话区执行步骤旁展示 `agent_trace` 事件（同上） |
+| P2 多 Agent（轻量自检提示） | `OMLXCLI_MULTI_AGENT` 扩展 `session_engine` 控制协议 |
+| P2 审计导出 | `GET /api/admin/sessions/{id}/audit-export` + `X-Admin-Token` / `OMLXCLI_ADMIN_TOKEN` |
+| 第 1 节：模型 HTTP 重试/超时/回退 | `oi_runtime_core.py`（`OMLXCLI_CHAT_*`、`OMLXCLI_MODEL_FALLBACKS`） |
+| 第 1 节：可选命令白名单 + workspace `realpath` | `OMLXCLI_EXEC_ALLOWLIST_RE` → `webapi/config.py`、`webapi/execution_policy.py` |
+| 第 1 节：会话归档与批量 | `sessions.archived`、`GET /api/sessions?include_archived=`、`POST /api/sessions/batch-archive` |
+| 第 1 节：上下文 priority / checkpoint mode | `contexts.priority`、`ResumeReq.mode` |
+| 技能全集映射（.omlxcli/skills） | `OI_TOOL_MAP.json` v2 + `scripts/gen_oi_tool_map.py` + `tests/test_oi_tool_map_skills.py`；规范见 **`Skills_README.md`** |
+
+后续可将 `agent_eval_scenarios.json` 扩至 **40～50+** 条，并增加「多步 shell / 需确认命令」等用例而不改运行器接口；`policy_eval_scenarios.json` 同理扩展边界与模板组合。
 

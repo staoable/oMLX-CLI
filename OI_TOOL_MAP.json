@@ -1,0 +1,157 @@
+{
+  "version": 2,
+  "scope": "omlxcli_skills_only",
+  "description": "本仓库技能全集 = `.omlxcli/skills`；权威清单以 `manifests/skills.json` 的 `skills` 键为准。 `skills` 数组由 `scripts/gen_oi_tool_map.py` 生成，请勿手改该数组（改 manifest 后运行 --write）。",
+  "manifest_path": ".omlxcli/skills/manifests/skills.json",
+  "skills": [
+    {
+      "name": "audio_transcribe",
+      "source_file": "audio.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "audio_transcribe_only",
+      "source_file": "audio.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "date_now",
+      "source_file": "clock.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "files_read_chunk",
+      "source_file": "files.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "files_search",
+      "source_file": "files.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "note_list",
+      "source_file": "notes.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "note_load",
+      "source_file": "notes.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "note_save",
+      "source_file": "notes.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "pdf_meta",
+      "source_file": "pdf.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "pdf_ocr",
+      "source_file": "pdf.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "pdf_read",
+      "source_file": "pdf.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "pdf_search",
+      "source_file": "pdf.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "pdf_to_text",
+      "source_file": "pdf.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "repo_grep",
+      "source_file": "repo_search.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "video_summarize",
+      "source_file": "video.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "vision_compare",
+      "source_file": "vision.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "vision_describe",
+      "source_file": "vision.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "weather_forecast",
+      "source_file": "weather.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "weather_now",
+      "source_file": "weather.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "web_read",
+      "source_file": "web_search.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "web_search",
+      "source_file": "web_search.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    }
+  ],
+  "runtime_protocol": {
+    "description": "非 skill 项：会话引擎协议与执行面，仍记在映射中便于文档交叉引用",
+    "run_shell": {
+      "web_status": "implemented",
+      "evidence": [
+        "webapi/session_engine.py",
+        "webapi/execution_policy.py"
+      ]
+    },
+    "run_skill": {
+      "web_status": "implemented",
+      "evidence": [
+        "webapi/skill_runner.py",
+        ".omlxcli/skills/_registry.py"
+      ]
+    },
+    "final_answer_protocol": {
+      "web_status": "implemented",
+      "evidence": [
+        "webapi/engine_protocol.py"
+      ]
+    }
+  }
+}

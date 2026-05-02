@@ -19,14 +19,20 @@ class ContextManager:
     def __init__(self, store: SessionStore) -> None:
         self.store = store
 
-    def add_pinned(self, session_id: str, content: str) -> dict[str, Any]:
-        return self.store.add_context(session_id=session_id, layer="pinned", content=content)
+    def add_pinned(self, session_id: str, content: str, *, priority: int = 0) -> dict[str, Any]:
+        return self.store.add_context(
+            session_id=session_id, layer="pinned", content=content, priority=priority
+        )
 
-    def add_working(self, session_id: str, content: str) -> dict[str, Any]:
-        return self.store.add_context(session_id=session_id, layer="working", content=content)
+    def add_working(self, session_id: str, content: str, *, priority: int = 0) -> dict[str, Any]:
+        return self.store.add_context(
+            session_id=session_id, layer="working", content=content, priority=priority
+        )
 
-    def add_archived(self, session_id: str, content: str) -> dict[str, Any]:
-        return self.store.add_context(session_id=session_id, layer="archived", content=content)
+    def add_archived(self, session_id: str, content: str, *, priority: int = 0) -> dict[str, Any]:
+        return self.store.add_context(
+            session_id=session_id, layer="archived", content=content, priority=priority
+        )
 
     def build_bundle(self, session_id: str, working_limit: int = 8, archived_limit: int = 5) -> ContextBundle:
         pinned_rows = self.store.list_contexts(session_id, layer="pinned")
@@ -251,15 +257,47 @@ class ContextManager:
         self.store.update_session(session_id, summary=summary)
         return self.store.add_checkpoint(session_id=session_id, summary=summary, payload=payload)
 
-    def restore_from_checkpoint(self, session_id: str, checkpoint_id: str) -> dict[str, Any]:
+    def restore_from_checkpoint(
+        self,
+        session_id: str,
+        checkpoint_id: str,
+        *,
+        mode: str = "append",
+    ) -> dict[str, Any]:
         checkpoints = self.store.list_checkpoints(session_id, limit=50)
         target = next((c for c in checkpoints if c["id"] == checkpoint_id), None)
         if target is None:
             raise KeyError(f"checkpoint not found: {checkpoint_id}")
         payload = target["payload"]
+        m = (mode or "append").strip().lower()
+        if m == "replace":
+            self.store.delete_contexts_by_layer(session_id, "working")
+        elif m != "append":
+            raise ValueError("mode 必须是 append 或 replace")
         for line in payload.get("working", []):
             self.add_working(session_id, line)
         return target
+
+    @staticmethod
+    def measure_messages_chars(messages: list[dict[str, Any]]) -> int:
+        def _content_len(c: Any) -> int:
+            if isinstance(c, str):
+                return len(c)
+            if isinstance(c, list):
+                n = 0
+                for part in c:
+                    if isinstance(part, dict):
+                        if isinstance(part.get("text"), str):
+                            n += len(part["text"])
+                        if isinstance(part.get("data"), str):
+                            n += min(len(part["data"]), 512)
+                        iu = part.get("image_url")
+                        if isinstance(iu, dict) and isinstance(iu.get("url"), str):
+                            n += min(len(iu["url"]), 512)
+                return n
+            return len(str(c))
+
+        return sum(_content_len(m.get("content")) for m in messages)
 
     @staticmethod
     def _trim_to_budget(messages: list[dict[str, Any]], budget_chars: int) -> list[dict[str, Any]]:

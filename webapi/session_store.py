@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +28,7 @@ class SessionRecord:
     confirm_each: bool
     pending_command: str
     summary: str
+    archived: bool
     created_at: str
     updated_at: str
     last_active_at: str
@@ -37,10 +40,19 @@ class SessionStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        except BaseException:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         with self._conn() as conn:
@@ -58,6 +70,7 @@ class SessionStore:
                     confirm_each INTEGER NOT NULL DEFAULT 1,
                     pending_command TEXT NOT NULL DEFAULT '',
                     summary TEXT NOT NULL DEFAULT '',
+                    archived INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     last_active_at TEXT NOT NULL
@@ -81,6 +94,7 @@ class SessionStore:
                     session_id TEXT NOT NULL,
                     layer TEXT NOT NULL,
                     content TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
                 );
@@ -121,11 +135,23 @@ class SessionStore:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
                 );
+
+                CREATE TABLE IF NOT EXISTS agent_trace (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    turn_id TEXT NOT NULL,
+                    step_index INTEGER NOT NULL,
+                    action_type TEXT NOT NULL,
+                    detail_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                );
                 """
             )
             self._migrate_sessions(conn)
             self._migrate_messages(conn)
             self._migrate_executions(conn)
+            self._migrate_contexts(conn)
 
     def _migrate_sessions(self, conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
@@ -144,6 +170,19 @@ class SessionStore:
         if "pending_command" not in cols:
             conn.execute(
                 "ALTER TABLE sessions ADD COLUMN pending_command TEXT NOT NULL DEFAULT ''"
+            )
+        if "archived" not in cols:
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+            )
+
+    def _migrate_contexts(self, conn: sqlite3.Connection) -> None:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(contexts)").fetchall()}
+        if not cols:
+            return
+        if "priority" not in cols:
+            conn.execute(
+                "ALTER TABLE contexts ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
             )
 
     def _migrate_messages(self, conn: sqlite3.Connection) -> None:
@@ -232,18 +271,27 @@ class SessionStore:
             conn.execute(
                 """
                 INSERT INTO sessions (
-                    id, title, title_locked, workspace_path, model, api_base, auto_run, execution_enabled, confirm_each, pending_command, summary, created_at, updated_at, last_active_at
-                ) VALUES (?, ?, 0, ?, ?, ?, ?, 0, 1, '', '', ?, ?, ?)
+                    id, title, title_locked, workspace_path, model, api_base, auto_run, execution_enabled, confirm_each, pending_command, summary, archived, created_at, updated_at, last_active_at
+                ) VALUES (?, ?, 0, ?, ?, ?, ?, 0, 1, '', '', 0, ?, ?, ?)
                 """,
                 (session_id, title, workspace_path, model, api_base, int(auto_run), now, now, now),
             )
         return self.get_session(session_id)
 
-    def list_sessions(self) -> list[SessionRecord]:
+    def list_sessions(self, *, include_archived: bool = False) -> list[SessionRecord]:
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM sessions ORDER BY last_active_at DESC"
-            ).fetchall()
+            if include_archived:
+                rows = conn.execute(
+                    "SELECT * FROM sessions ORDER BY last_active_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM sessions
+                    WHERE COALESCE(archived, 0) = 0
+                    ORDER BY last_active_at DESC
+                    """
+                ).fetchall()
         return [self._row_to_session(r) for r in rows]
 
     def get_session(self, session_id: str) -> SessionRecord:
@@ -265,6 +313,7 @@ class SessionStore:
             "confirm_each",
             "pending_command",
             "summary",
+            "archived",
         }
         fields = {k: v for k, v in updates.items() if k in allowed and v is not None}
         if "title_locked" in fields:
@@ -273,6 +322,8 @@ class SessionStore:
             fields["execution_enabled"] = int(bool(fields["execution_enabled"]))
         if "confirm_each" in fields:
             fields["confirm_each"] = int(bool(fields["confirm_each"]))
+        if "archived" in fields:
+            fields["archived"] = int(bool(fields["archived"]))
         if not fields:
             return self.get_session(session_id)
         fields["updated_at"] = _now_iso()
@@ -367,44 +418,77 @@ class SessionStore:
             )
         return out
 
-    def add_context(self, *, session_id: str, layer: str, content: str) -> dict[str, Any]:
+    def add_context(
+        self,
+        *,
+        session_id: str,
+        layer: str,
+        content: str,
+        priority: int = 0,
+    ) -> dict[str, Any]:
         context_id = str(uuid.uuid4())
         now = _now_iso()
+        pri = int(priority)
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO contexts (id, session_id, layer, content, created_at) VALUES (?, ?, ?, ?, ?)",
-                (context_id, session_id, layer, content, now),
+                """
+                INSERT INTO contexts (id, session_id, layer, content, priority, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (context_id, session_id, layer, content, pri, now),
             )
         return {
             "id": context_id,
             "session_id": session_id,
             "layer": layer,
             "content": content,
+            "priority": pri,
             "created_at": now,
         }
+
+    def delete_contexts_by_layer(self, session_id: str, layer: str) -> int:
+        with self._conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM contexts WHERE session_id = ? AND layer = ?",
+                (session_id, layer),
+            )
+            return int(cur.rowcount or 0)
 
     def list_contexts(self, session_id: str, layer: str | None = None) -> list[dict[str, Any]]:
         with self._conn() as conn:
             if layer:
                 rows = conn.execute(
-                    "SELECT * FROM contexts WHERE session_id = ? AND layer = ? ORDER BY created_at DESC",
+                    """
+                    SELECT * FROM contexts
+                    WHERE session_id = ? AND layer = ?
+                    ORDER BY priority DESC, created_at DESC
+                    """,
                     (session_id, layer),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM contexts WHERE session_id = ? ORDER BY created_at DESC",
+                    """
+                    SELECT * FROM contexts
+                    WHERE session_id = ?
+                    ORDER BY priority DESC, created_at DESC
+                    """,
                     (session_id,),
                 ).fetchall()
-        return [
-            {
-                "id": r["id"],
-                "session_id": r["session_id"],
-                "layer": r["layer"],
-                "content": r["content"],
-                "created_at": r["created_at"],
-            }
-            for r in rows
-        ]
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            keys = r.keys()
+            pri = int(r["priority"]) if "priority" in keys else 0
+            out.append(
+                {
+                    "id": r["id"],
+                    "session_id": r["session_id"],
+                    "layer": r["layer"],
+                    "content": r["content"],
+                    "priority": pri,
+                    "created_at": r["created_at"],
+                }
+            )
+        return out
 
     def add_checkpoint(
         self,
@@ -540,6 +624,83 @@ class SessionStore:
             )
         return out
 
+    def add_agent_trace(
+        self,
+        *,
+        session_id: str,
+        turn_id: str,
+        step_index: int,
+        action_type: str,
+        detail: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        row_id = str(uuid.uuid4())
+        now = _now_iso()
+        blob = json.dumps(detail or {}, ensure_ascii=False)
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO agent_trace (
+                    id, session_id, turn_id, step_index, action_type, detail_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (row_id, session_id, turn_id, int(step_index), action_type, blob, now),
+            )
+        return {
+            "id": row_id,
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "step_index": int(step_index),
+            "action_type": action_type,
+            "detail": detail or {},
+            "created_at": now,
+        }
+
+    def list_agent_trace(
+        self,
+        session_id: str,
+        *,
+        turn_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit), 500))
+        with self._conn() as conn:
+            if turn_id:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM agent_trace
+                    WHERE session_id = ? AND turn_id = ?
+                    ORDER BY step_index ASC, created_at ASC
+                    LIMIT ?
+                    """,
+                    (session_id, turn_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM agent_trace
+                    WHERE session_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (session_id, limit),
+                ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            out.append(
+                {
+                    "id": r["id"],
+                    "session_id": r["session_id"],
+                    "turn_id": r["turn_id"],
+                    "step_index": int(r["step_index"]),
+                    "action_type": r["action_type"],
+                    "detail": json.loads(r["detail_json"] or "{}"),
+                    "created_at": r["created_at"],
+                }
+            )
+        if not turn_id:
+            out.reverse()
+        return out
+
     @staticmethod
     def _row_to_session(row: sqlite3.Row) -> SessionRecord:
         keys = row.keys()
@@ -547,6 +708,7 @@ class SessionStore:
         execution_enabled = bool(row["execution_enabled"]) if "execution_enabled" in keys else False
         confirm_each = bool(row["confirm_each"]) if "confirm_each" in keys else True
         pending_command = str(row["pending_command"]) if "pending_command" in keys else ""
+        archived = bool(row["archived"]) if "archived" in keys else False
         return SessionRecord(
             id=row["id"],
             title=row["title"],
@@ -559,6 +721,7 @@ class SessionStore:
             confirm_each=confirm_each,
             pending_command=pending_command,
             summary=row["summary"],
+            archived=archived,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             last_active_at=row["last_active_at"],

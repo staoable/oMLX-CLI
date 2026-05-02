@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import time
+import uuid
 import urllib.error
 from dataclasses import dataclass
 from typing import Any, Generator
@@ -20,6 +21,7 @@ from webapi.engine_protocol import (
     is_workdir_query,
     strip_model_leak_tokens,
 )
+from webapi.config import load_execution_policy_config
 from webapi.execution_policy import check_command_policy
 from webapi.logging_utils import log_event
 from webapi.session_store import SessionStore
@@ -52,6 +54,7 @@ class OiSessionEngine:
     def __init__(self, store: SessionStore, context_manager: ContextManager) -> None:
         self.store = store
         self.context_manager = context_manager
+        self._checkpoint_at_msg_count: dict[str, int] = {}
 
     @staticmethod
     def _effective_model(stored: str) -> str:
@@ -91,12 +94,14 @@ class OiSessionEngine:
             api_key=os.getenv("OI_API_KEY", "not-needed"),
         )
         history = self.store.list_messages(session_id, limit=300)
+        budget_chars = max(4096, int(os.getenv("OMLXCLI_CONTEXT_BUDGET_CHARS", "24000")))
         prompt_messages, prompt_debug = self.context_manager.build_prompt_messages_debug(
             session_id=session_id,
             system_prompt=system_prompt,
             recent_messages=history,
             user_input=user_input,
             attachments=attachments,
+            token_budget_chars=budget_chars,
         )
         for row in prompt_debug:
             self.store.add_context_injection(
@@ -241,16 +246,7 @@ class OiSessionEngine:
             metrics=metrics,
         )
         self._maybe_auto_rename_session(session_id, user_input)
-
-        # 长会话自动摘要检查点
-        all_messages = self.store.list_messages(session_id, limit=500)
-        if len(all_messages) % 12 == 0:
-            summary = self._build_quick_summary(all_messages[-12:])
-            self.context_manager.create_checkpoint(
-                session_id=session_id,
-                summary=summary,
-                recent_messages=all_messages,
-            )
+        self._maybe_budget_checkpoint(session_id, prompt_messages)
         return answer
 
     def _confirm_and_run(
@@ -378,7 +374,7 @@ class OiSessionEngine:
             stdout=str(result["stdout"]),
             stderr=str(result["stderr"]),
             duration_ms=float(result.get("duration_ms") or 0.0),
-            metadata={"source": "confirm_api"},
+            metadata={"source": "confirm_api", "approved_via": "confirm_api"},
         )
         answer = (
             f"已执行命令：`{cmd}`\n\n"
@@ -425,6 +421,45 @@ class OiSessionEngine:
         os.makedirs(workdir, exist_ok=True)
         skill_funcs, skills_md = load_skills_registry()
         skill_enabled = bool(skill_funcs)
+        policy_cfg = load_execution_policy_config()
+        turn_id = str(uuid.uuid4())
+        trace_step = [0]
+
+        def _trace_event(action: str, detail: dict[str, Any]) -> dict[str, Any]:
+            idx = trace_step[0]
+            trace_step[0] += 1
+            self.store.add_agent_trace(
+                session_id=session_id,
+                turn_id=turn_id,
+                step_index=idx,
+                action_type=action,
+                detail=detail,
+            )
+            return {
+                "type": "agent_trace",
+                "turn_id": turn_id,
+                "step_index": idx,
+                "action": action,
+                "detail": detail,
+            }
+
+        yield _trace_event(
+            "turn_start",
+            {"workspace": workdir, "policy_template": policy_cfg.template, "policy_mode": policy_cfg.mode},
+        )
+
+        multi_agent = os.getenv("OMLXCLI_MULTI_AGENT", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "review",
+        }
+        multi_hint = ""
+        if multi_agent:
+            multi_hint = (
+                "8) 多智能体自检：在输出 <final_answer> 之前，用不超过两句检查「工具输出是否与结论矛盾」；"
+                "若矛盾则以工具输出为准修正结论。\n"
+            )
 
         control_prompt = (
             "你是可执行本地 CLI 的助手。你必须遵守如下输出协议：\n"
@@ -439,13 +474,13 @@ class OiSessionEngine:
                 if skill_enabled
                 else "7) 当前未加载到本地 skills，仅可使用 run_shell。\n"
             )
+            + multi_hint
         )
         convo = list(prompt_messages) + [{"role": "system", "content": control_prompt}]
         if skills_md:
             convo.append({"role": "system", "content": skills_md})
         first_token_t: float | None = None
-        # 复杂任务（如定位文件后继续读取/分析）通常需要更多轮次
-        max_rounds = 8
+        max_rounds = max(1, min(int(os.getenv("OMLXCLI_MAX_EXEC_ROUNDS", "8")), 24))
         final_answer = ""
         executed_any = False
 
@@ -492,6 +527,11 @@ class OiSessionEngine:
                     command=skill_expr,
                     exit_code=skill_ret["exit_code"],
                 )
+                exec_meta = {
+                    "turn_id": turn_id,
+                    "exec_policy_template": policy_cfg.template,
+                    "exec_policy_mode": policy_cfg.mode,
+                }
                 self.store.add_execution(
                     session_id=session_id,
                     exec_type="skill",
@@ -500,6 +540,14 @@ class OiSessionEngine:
                     exit_code=int(skill_ret["exit_code"]),
                     stdout=str(skill_ret["stdout"]),
                     stderr=str(skill_ret["stderr"]),
+                    metadata=exec_meta,
+                )
+                yield _trace_event(
+                    "skill_result",
+                    {
+                        "expr": skill_expr[:400],
+                        "exit_code": int(skill_ret["exit_code"]),
+                    },
                 )
                 yield {
                     "type": "exec_result",
@@ -547,6 +595,15 @@ class OiSessionEngine:
                     command=cmd,
                     status="blocked",
                     reason=reason,
+                    metadata={
+                        "turn_id": turn_id,
+                        "exec_policy_template": policy_cfg.template,
+                        "exec_policy_mode": policy_cfg.mode,
+                    },
+                )
+                yield _trace_event(
+                    "shell_blocked",
+                    {"command": cmd[:400], "reason": reason},
                 )
                 self.store.update_session(session_id, pending_command="")
                 break
@@ -559,6 +616,15 @@ class OiSessionEngine:
                     command=cmd,
                     status="need_confirm",
                     reason=reason,
+                    metadata={
+                        "turn_id": turn_id,
+                        "exec_policy_template": policy_cfg.template,
+                        "exec_policy_mode": policy_cfg.mode,
+                    },
+                )
+                yield _trace_event(
+                    "shell_need_confirm",
+                    {"command": cmd[:400], "reason": reason},
                 )
                 yield {
                     "type": "require_confirm",
@@ -592,7 +658,20 @@ class OiSessionEngine:
                 stdout=str(exec_result["stdout"]),
                 stderr=str(exec_result["stderr"]),
                 duration_ms=float(exec_result.get("duration_ms") or 0.0),
-                metadata={"source": "auto_exec_loop"},
+                metadata={
+                    "source": "auto_exec_loop",
+                    "turn_id": turn_id,
+                    "exec_policy_template": policy_cfg.template,
+                    "exec_policy_mode": policy_cfg.mode,
+                },
+            )
+            yield _trace_event(
+                "shell_result",
+                {
+                    "command": cmd[:400],
+                    "exit_code": int(exec_result["exit_code"]),
+                    "duration_ms": exec_result.get("duration_ms"),
+                },
             )
             yield {"type": "exec_result", "command": cmd, **exec_result}
             executed_any = True
@@ -676,7 +755,33 @@ class OiSessionEngine:
             metrics=metrics,
         )
         self._maybe_auto_rename_session(session_id, user_input)
+        self._maybe_budget_checkpoint(session_id, convo)
         return final_answer
+
+    def _maybe_budget_checkpoint(
+        self,
+        session_id: str,
+        size_messages: list[dict[str, Any]],
+    ) -> None:
+        """当估算上下文体积超过预算比例时，节流写入自动摘要 checkpoint。"""
+        budget = max(4096, int(os.getenv("OMLXCLI_CONTEXT_BUDGET_CHARS", "24000")))
+        ratio = max(0.5, min(float(os.getenv("OMLXCLI_SUMMARY_TRIGGER_RATIO", "0.82")), 0.99))
+        throttle = max(4, int(os.getenv("OMLXCLI_SUMMARY_MIN_MESSAGES_BETWEEN", "6")))
+        chars = ContextManager.measure_messages_chars(size_messages)
+        if chars < budget * ratio:
+            return
+        all_messages = self.store.list_messages(session_id, limit=500)
+        n = len(all_messages)
+        last = self._checkpoint_at_msg_count.get(session_id, 0)
+        if n - last < throttle:
+            return
+        self._checkpoint_at_msg_count[session_id] = n
+        summary = self._build_quick_summary(all_messages[-12:])
+        self.context_manager.create_checkpoint(
+            session_id=session_id,
+            summary=summary,
+            recent_messages=all_messages,
+        )
 
     @staticmethod
     def _run_shell_command(cmd: str, cwd: str, timeout_sec: int = 90) -> dict[str, Any]:

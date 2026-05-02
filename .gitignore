@@ -2,4 +2,6 @@
 .omlxcli/**/*.db
 .omlxcli/**/__pycache__/
 __pycache__/
+# 本地环境与凭据（勿提交；全量键说明见 .env.example）
+.env
 .env.local

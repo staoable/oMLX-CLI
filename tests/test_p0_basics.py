@@ -23,6 +23,7 @@ class P0BasicsTest(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        del self.store
         self.tmpdir.cleanup()
 
     def test_execution_and_context_injection_persistence(self) -> None:

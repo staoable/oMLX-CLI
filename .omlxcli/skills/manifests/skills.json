@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "skills": {
+    "web_search": {
+      "version": "2.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 1,
+      "max_total_args": 24,
+      "changelog": "gateway v2 + 排序白名单"
+    },
+    "web_read": {
+      "version": "1.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 1,
+      "max_total_args": 4
+    },
+    "pdf_meta": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 4
+    },
+    "pdf_read": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read", "network_optional"],
+      "min_positional_args": 1,
+      "max_total_args": 12
+    },
+    "pdf_ocr": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 10
+    },
+    "pdf_to_text": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 8
+    },
+    "pdf_search": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 2,
+      "max_total_args": 12
+    },
+    "weather_now": {
+      "version": "1.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 1,
+      "max_total_args": 4
+    },
+    "weather_forecast": {
+      "version": "1.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 1,
+      "max_total_args": 6
+    },
+    "note_save": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_write"],
+      "min_positional_args": 2,
+      "max_total_args": 6
+    },
+    "note_load": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 4
+    },
+    "note_list": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 0,
+      "max_total_args": 2
+    },
+    "date_now": {
+      "version": "1.0.0",
+      "permissions": [],
+      "min_positional_args": 0,
+      "max_total_args": 2
+    },
+    "vision_describe": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read", "network_optional"],
+      "min_positional_args": 1,
+      "max_total_args": 8
+    },
+    "vision_compare": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read", "network_optional"],
+      "min_positional_args": 1,
+      "max_total_args": 8
+    },
+    "video_summarize": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read", "network_optional"],
+      "min_positional_args": 1,
+      "max_total_args": 16
+    },
+    "files_search": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 12
+    },
+    "files_read_chunk": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 10
+    },
+    "audio_transcribe": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read", "network_optional"],
+      "min_positional_args": 1,
+      "max_total_args": 12
+    },
+    "audio_transcribe_only": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read", "network_optional"],
+      "min_positional_args": 1,
+      "max_total_args": 8
+    },
+    "repo_grep": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read", "subprocess"],
+      "min_positional_args": 1,
+      "max_total_args": 10
+    }
+  }
+}
