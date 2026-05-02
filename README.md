@@ -56,7 +56,6 @@
 
 **EN** · PNGs in `docs/readme/` are **resampled to ~900px width** (~160–210 KB each) for faster GitHub README loads. Replace the files when you update captures—keep the same names.
 
-**中文** · 截图已 **横向缩放到约 900 像素**（单张约一百多～两百 KB），减轻 GitHub 项目页加载。更新截图时请仍覆盖同名 PNG。
 
 <p align="center">
   <b>Web UI · 会话与执行流</b><br/>
