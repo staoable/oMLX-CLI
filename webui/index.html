@@ -201,11 +201,11 @@
                 <input id="vendorFormApiBase" type="text" class="input" placeholder="https://api.deepseek.com" spellcheck="false" autocomplete="off" />
               </label>
               <label class="field">
-                <span class="field__label">默认模型（测试连接后自动填第一项，可改）</span>
+                <span class="field__label">默认模型（下载模型列表后自动填第一项，可改）</span>
                 <select id="vendorFormDefaultModel" class="input input--select"></select>
               </label>
               <label class="field">
-                <span class="field__label">API Key（保存在本机数据库；列表接口不回显，单条读取时用于编辑/测试）</span>
+                <span class="field__label">API Key（保存在本机数据库；列表接口不回显，单条读取时用于编辑与下载模型列表）</span>
                 <input
                   id="vendorFormApiKey"
                   type="text"
@@ -218,7 +218,7 @@
               </label>
             </div>
             <div class="settings-footer vendors-form-actions">
-              <button id="vendorProbeBtn" type="button" class="btn btn--ghost">测试连接</button>
+              <button id="vendorProbeBtn" type="button" class="btn btn--ghost">下载模型列表</button>
               <button id="vendorSaveRecordBtn" type="button" class="btn btn--primary">保存模型设置</button>
               <button id="vendorNewBtn" type="button" class="btn btn--ghost">清空表单</button>
             </div>

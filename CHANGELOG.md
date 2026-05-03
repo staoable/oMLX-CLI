@@ -11,7 +11,7 @@
 
 ### 文档
 
-- **`Skills_README.md`**、**`OI_CAPABILITY_MATRIX.md`**、**`IMPLEMENTATION_PLAN.md`**、**`README_cn.md` / `README_en.md`**、**`.env.example`** 已补充与上述 skills 一致的说明。
+- **`Skills_README.md`** §8.1、**`.env.example`「九·1」**、**`scripts/smoke_all_skills.py`** 头注释、**`README_cn.md` / `README_en.md`** 命令表：全技能冒烟变量与 **`OMLXCLI_EVAL_SKIP_HTTP`** / **`web_read`** 关系；**vision_*** / **audio_transcribe** / **video_summarize** 在无 **`_AICLI_API_BASE`** 时 **SKIP**（非 FAIL）；**`OI_CAPABILITY_MATRIX.md`**、**`IMPLEMENTATION_PLAN.md`** 与 skills 条目已对齐。
 
 ## [0.2.0] — 2026-05-02
 

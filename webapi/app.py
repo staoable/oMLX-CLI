@@ -43,7 +43,7 @@ engine = OiSessionEngine(store, ctx)
 
 
 def _vendor_dict(v: Any, *, include_api_key: bool = False) -> dict[str, Any]:
-    """列表与创建/更新响应默认剔除 api_key；单条 GET 含 api_key 供管理界面编辑与测试连接。"""
+    """列表与创建/更新响应默认剔除 api_key；单条 GET 含 api_key 供管理界面编辑与下载模型列表。"""
     d = asdict(v)
     if not include_api_key:
         d.pop("api_key", None)
@@ -282,7 +282,7 @@ def list_models(
 
 @app.post("/api/vendors/probe")
 def probe_vendor(req: VendorProbeReq) -> dict[str, Any]:
-    """使用请求体中的 api_key 测试连接并拉取模型列表（不写库、不写文件）。"""
+    """使用请求体中的 api_key 拉取模型列表（不写库、不写文件）；供界面「下载模型列表」。"""
     if not (req.api_key or "").strip():
         raise HTTPException(status_code=400, detail="api_key 不能为空")
     base, models = _fetch_upstream_model_ids(req.api_base, req.api_key.strip())

@@ -8,7 +8,7 @@
 
 - **凭据**：仅 **`vendors.api_key`** + **`api_base`**；`webapi/upstream_credentials.resolve_upstream_credentials(session, store)` 读取；**不**用 `.env` 中的 `OI_API_*` 作为 Web 对话上游。
 - **会话**：`sessions.vendor_id` 可空；未绑定或密钥为空时，**发消息**会得到明确中文错误，引导先配置并保存模型设置。
-- **拉模型**：**`GET /api/models?vendor_id=<vendors.id>`**（`vendor_id` 必填）；**`POST /api/vendors/probe`** 用请求体中的 base+key 探测，不写库。
+- **拉模型**：**`GET /api/models?vendor_id=<vendors.id>`**（`vendor_id` 必填）；**`POST /api/vendors/probe`** 用请求体中的 base+key 拉取列表（界面「下载模型列表」），不写库。
 - **对话**：`POST {api_base}/chat/completions`（`oi_runtime_core`），流式字段 `choices[0].delta.content`。
 - **Skills**：`run_skill` 前 **`_skill_llm_env`** 写入 **`_AICLI_API_BASE`**、**`_AICLI_API_KEY`**、**`_AICLI_LLM_MODEL`**；`_media._llm_endpoint` **不**回退 `OI_API_*`。
 - **默认 model**：新会话默认 id 见代码 **`DEFAULT_SESSION_MODEL_ID`**；占位名 `local`/`default`/空时优先已绑定 **`vendors.default_model`**（见 `session_engine._resolve_effective_model`）。
@@ -70,7 +70,7 @@
 
 ## 6. Web UI 要点
 
-- **模型设置**弹窗：列表、新建/编辑、probe、保存；新建/更新成功后**清空表单**以免误 `PATCH`（与内置 `webui/app.js` 行为一致）。
+- **模型设置**弹窗：列表、新建/编辑、「下载模型列表」（`POST /api/vendors/probe`）、保存；新建/更新成功后**清空表单**以免误 `PATCH`（与内置 `webui/app.js` 行为一致）。
 - **会话设置**：下拉绑定 `vendor_id`；「刷新模型」必须带已保存行的 **`vendor_id`** 调 **`GET /api/models`**。
 
 ---

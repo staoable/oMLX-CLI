@@ -124,12 +124,26 @@ CI 与本地全量测试包含 **Playwright** 对 `/ui/` 的静态冒烟（见 `
 
 ### 8.1 一次性跑全技能（冒烟）
 
-仓库根执行 **`python3 scripts/smoke_all_skills.py`**：按 manifest 对每个技能尝试最小 `run_skill` 调用，输出 **OK / SKIP / FAIL**。缺音频/PDF/图片/视频样例或未开外网时为 **SKIP**（非失败）；可选变量见脚本顶部说明（`OMLXCLI_SMOKE_*`）。**音频技能**依赖 **`mlx-whisper`**：Apple Silicon 上执行 **`./bootstrap.sh`** 后请用 **`.venv/bin/python scripts/smoke_all_skills.py`**（或与 Web 相同的解释器），否则若系统 `python3` 未装依赖会 **SKIP** 或运行时报缺包。
+仓库根执行 **`python3 scripts/smoke_all_skills.py`**（或 **`.venv/bin/python scripts/smoke_all_skills.py`**）：按 manifest 对每个技能尝试最小 `run_skill` 调用，输出 **OK / SKIP / FAIL**。仅有 **FAIL** 时进程退出码为 **1**；**SKIP** 表示缺样例/缺依赖/未开外网等（**不算失败**）。
+
+**建议在 `.env` / `.env.local` 配置的变量（完整说明见仓库根 `.env.example`「九·1」）：**
+
+| 变量 | 作用 |
+|------|------|
+| **`OMLXCLI_SMOKE_NETWORK=1`** | 打开 **weather_***、**web_read** 等外网冒烟分支。 |
+| **`OMLXCLI_SMOKE_PDF_PATH`** 等 | **`OMLXCLI_SMOKE_IMAGE_PATH`**、**`OMLXCLI_SMOKE_AUDIO_PATH`**、**`OMLXCLI_SMOKE_VIDEO_PATH`**：本机样例**绝对路径**；不设则对应技能 **SKIP**。 |
+| **`OMLXCLI_SEARCH_GATEWAY_*` / `OMLXCLI_SEARXNG_URL`** | **web_search** 需要（见 **`.env.example` 第五节**）；与 **`OMLXCLI_SMOKE_NETWORK=1`** 同开。 |
+| **`OMLXCLI_EVAL_SKIP_HTTP`** | 测 **web_read** 时请**勿**设为 `1/true`（否则脚本 **SKIP**）；与 CI 单测跳过外网语义一致。 |
+| **`_AICLI_API_BASE`**（及 **`_AICLI_API_KEY`**、**`_AICLI_LLM_MODEL`**） | **vision_***、**audio_transcribe**（非 `audio_transcribe_only`）、**video_summarize** 依赖 LLM；与 Web 会话注入同名，见 **`.env.example`「十」**。不设时冒烟 **SKIP**。 |
+
+**无需为冒烟单独配置路径变量**（没有 `OMLXCLI_SMOKE_XLSX_PATH` 之类）：**`csv_tsv_summary`** 与 **`xlsx_sample`** 由脚本在 **`.omlxcli/`** 下写入 **`_smoke_sample.csv`** / **`_smoke_sample.xlsx`**（xlsx 依赖 **openpyxl**）；**`docx_to_text`** 写入 **`_smoke_sample.docx`**（依赖 **python-docx**）；**`structured_pick`** 读仓库根 **`OI_TOOL_MAP.json`**（可先 **`python3 scripts/gen_oi_tool_map.py --write`**）；**`git_snapshot`** 对当前仓库根做只读 **`git log`**。缺 **openpyxl / python-docx** 或缺 **`OI_TOOL_MAP.json`** 时对应行为 **SKIP**（非 FAIL）。
+
+**音频 / 视频转写**依赖 **`mlx-whisper`**：Apple Silicon 上 **`./bootstrap.sh`** 后用 **`.venv/bin/python`** 跑本脚本；否则 **audio_*** / **video_summarize** 可能 **SKIP** 或缺包报错。
 
 **传入环境变量的两种方式（二选一即可）：**
 
-1. **写入 `.env.local`**（推荐）：脚本会调用与 Web 相同的 **`load_dotenv_files`** 加载 `.env` / `.env.local`，其中的 `OMLXCLI_SMOKE_*`、`OMLXCLI_SEARCH_GATEWAY_*` 等会被 Python 进程读取。
-2. **在终端里 `export`**：仅写 `VAR=value` **不会**传给 `python3` 子进程，必须 `export OMLXCLI_SMOKE_PDF_PATH=/path/to.pdf` 等形式。
+1. **写入 `.env.local`**（推荐）：脚本会调用与 Web 相同的 **`load_dotenv_files`** 加载 `.env` / `.env.local`。
+2. **在终端里 `export`**：仅写 `VAR=value` **不会**传给 `python3` 子进程，必须 **`export VAR=value`**。
 
 **zsh 注意**：`unset` 与行内 `#` 注释偶发解析问题，请把注释单独成行，例如：
 
@@ -138,8 +152,6 @@ unset OMLXCLI_EVAL_SKIP_HTTP
 export OMLXCLI_SMOKE_NETWORK=1
 python3 scripts/smoke_all_skills.py
 ```
-
-跑 **`web_read`** 时：需 **`OMLXCLI_SMOKE_NETWORK=1`**，且 **`OMLXCLI_EVAL_SKIP_HTTP` 不能为 `1/true`**（否则与 CI 跳过外网评测语义一致，脚本会 SKIP）。
 
 ---
 

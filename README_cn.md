@@ -153,7 +153,7 @@ oMLX-CLI/
 | 命令 | 作用 |
 |------|------|
 | `./scripts/dev_check.sh` | `gen_oi_tool_map.py --check` + 全量 `unittest`（与 CI 主体对齐）。 |
-| `python3 scripts/smoke_all_skills.py` | 可选：对 manifest 全技能冒烟；环境变量见 **`Skills_README.md`** §8.1。 |
+| `python3 scripts/smoke_all_skills.py` | 可选：对 manifest 全技能冒烟；变量见 **`.env.example`「九·1」** 与 **`Skills_README.md`** §8.1。 |
 | `./.venv/bin/python -m playwright install chromium` | 首次跑 E2E 前安装 Chromium。 |
 
 GitHub Actions（`.github/workflows/ci.yml`）：安装依赖与 Playwright Chromium，执行 `gen_oi_tool_map --check`、含 Playwright 的 `unittest`、以及拉起 `uvicorn` 后的 `scripts/smoke_http.py`。单测默认 `OMLXCLI_EVAL_SKIP_HTTP=1`，跳过依赖外网的评测场景。

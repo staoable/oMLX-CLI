@@ -427,7 +427,7 @@ function clearVendorForm() {
   el("vendorFormDefaultModel").innerHTML = "";
   const o = document.createElement("option");
   o.value = "";
-  o.textContent = "（请先测试连接）";
+  o.textContent = "（请先下载模型列表）";
   el("vendorFormDefaultModel").appendChild(o);
   setVendorFormHint("");
 }
@@ -518,7 +518,7 @@ async function loadVendorIntoForm(vendorId) {
   } else {
     const o = document.createElement("option");
     o.value = "";
-    o.textContent = "（请先测试连接）";
+    o.textContent = "（请先下载模型列表）";
     sel.appendChild(o);
   }
   setVendorFormHint("");
@@ -555,7 +555,7 @@ async function onVendorProbeClick() {
     setVendorFormHint("请填写 API Key；编辑已保存条目并点「编辑」可加载库里已存密钥。");
     return;
   }
-  setVendorFormHint("正在测试…");
+  setVendorFormHint("正在下载模型列表…");
   try {
     const res = await probeVendor(base, key);
     const models = res.models || [];
@@ -568,9 +568,9 @@ async function onVendorProbeClick() {
       sel.appendChild(opt);
     }
     if (models.length) sel.value = models[0];
-    setVendorFormHint(`成功，共 ${models.length} 个模型。默认已选第一项，可修改后保存模型设置。`);
+    setVendorFormHint(`已获取 ${models.length} 个模型。默认已选第一项，可修改后保存模型设置。`);
   } catch (e) {
-    setVendorFormHint(`测试失败：${formatApiError(e)}`);
+    setVendorFormHint(`下载模型列表失败：${formatApiError(e)}`);
   }
 }
 

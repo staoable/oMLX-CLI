@@ -4,12 +4,19 @@
 用法（在仓库根目录）：
   python3 scripts/smoke_all_skills.py
 
-可选环境变量（见下方「如何传入子进程」）：
+可选环境变量（完整表见仓库根 **`.env.example`「九·1」**；亦可写入 `.env.local`）：
   OMLXCLI_SMOKE_NETWORK=1
   OMLXCLI_SMOKE_PDF_PATH=/绝对路径/样例.pdf
   OMLXCLI_SMOKE_IMAGE_PATH=/绝对路径/样例.png
   OMLXCLI_SMOKE_AUDIO_PATH=/绝对路径/样例.m4a
   OMLXCLI_SMOKE_VIDEO_PATH=/绝对路径/样例.mp4
+  web_search 另需 .env 中 OMLXCLI_SEARCH_GATEWAY_* 或 OMLXCLI_SEARXNG_URL（见 .env.example 第五节）。
+  web_read 需 OMLXCLI_SMOKE_NETWORK=1 且 OMLXCLI_EVAL_SKIP_HTTP 不能为 1/true。
+  vision_* / audio_transcribe / video_summarize 需已配置推理端点：见「十」_AICLI_API_BASE（及 KEY、MODEL），
+  未 export 时冒烟为 SKIP（与仅 CLI 跑脚本、无 Web 会话一致）。
+
+无 OMLXCLI_SMOKE_* 路径变量：`csv_tsv_summary` / `xlsx_sample` / `docx_to_text` 在 `.omlxcli/_smoke_sample.{csv,xlsx,docx}` 自造样例（跑完删）；
+`structured_pick` 读 `OI_TOOL_MAP.json`；`git_snapshot` 用 `__ROOT__` 的 git log。缺 openpyxl/python-docx 或缺 OI_TOOL_MAP.json 时 SKIP。
 
 如何传入子进程：
   - 本脚本启动时会加载仓库根目录的 **`.env` / `.env.local`**（与 `webapi` 相同规则），写入其中的
@@ -65,6 +72,11 @@ def _has_mlx_whisper() -> bool:
     return importlib.util.find_spec("mlx_whisper") is not None
 
 
+def _smoke_has_llm_endpoint() -> bool:
+    """与 `.omlxcli/skills/_media._llm_endpoint` 一致：无 Web 注入时需自行 export _AICLI_API_BASE。"""
+    return bool((os.getenv("_AICLI_API_BASE") or "").strip())
+
+
 def main() -> int:
     sys.path.insert(0, str(ROOT))
     os.chdir(ROOT)
@@ -84,6 +96,7 @@ def main() -> int:
         return 1
 
     rows: list[tuple[str, str, str, str]] = []
+    cleanup_files: list[Path] = []
     note = "smoke_all_skills_note"
 
     def run(name: str, expr: str) -> tuple[str, str, str]:
@@ -115,6 +128,47 @@ def main() -> int:
             expr = "files_search('SessionStore', path='__ROOT__/webapi', kind='content', max_results=1)"
         elif name == "repo_grep":
             expr = "repo_grep('def', path='__ROOT__/webapi', max_matches=2)"
+        elif name == "csv_tsv_summary":
+            p = ROOT / ".omlxcli" / "_smoke_sample.csv"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("h1,h2\n3,4\n", encoding="utf-8")
+            cleanup_files.append(p)
+            expr = f"csv_tsv_summary({json.dumps(str(p))})"
+        elif name == "structured_pick":
+            jpath = ROOT / "OI_TOOL_MAP.json"
+            if not jpath.is_file():
+                skip_reason = "缺少 OI_TOOL_MAP.json（请先 gen_oi_tool_map --write）"
+            else:
+                expr = f"structured_pick({json.dumps(str(jpath))}, pointer='scope', format='json')"
+        elif name == "git_snapshot":
+            expr = "git_snapshot('log', repo_path='__ROOT__', limit=5)"
+        elif name == "xlsx_sample":
+            try:
+                from openpyxl import Workbook
+            except ImportError:
+                skip_reason = "缺少 openpyxl（见 requirements.txt）"
+            else:
+                px = ROOT / ".omlxcli" / "_smoke_sample.xlsx"
+                wb = Workbook()
+                ws = wb.active
+                ws.append(["c", "d"])
+                ws.append(["1", "2"])
+                wb.save(px)
+                wb.close()
+                cleanup_files.append(px)
+                expr = f"xlsx_sample({json.dumps(str(px))}, max_rows=6, max_cols=4)"
+        elif name == "docx_to_text":
+            try:
+                from docx import Document
+            except ImportError:
+                skip_reason = "缺少 python-docx（见 requirements.txt）"
+            else:
+                px = ROOT / ".omlxcli" / "_smoke_sample.docx"
+                d = Document()
+                d.add_paragraph("smoke docx line")
+                d.save(px)
+                cleanup_files.append(px)
+                expr = f"docx_to_text({json.dumps(str(px))}, max_chars=8000)"
         elif name in ("web_search",):
             if not _want_network() or not _gateway():
                 skip_reason = "需外网 + 网关：设置 OMLXCLI_SMOKE_NETWORK=1 且配置 SEARCH_GATEWAY 或 SEARXNG"
@@ -155,6 +209,8 @@ def main() -> int:
             img = (os.getenv("OMLXCLI_SMOKE_IMAGE_PATH") or "").strip()
             if not img or not Path(img).is_file():
                 skip_reason = "无图片：设置 OMLXCLI_SMOKE_IMAGE_PATH=/绝对路径/样例.png"
+            elif not _smoke_has_llm_endpoint():
+                skip_reason = "缺推理端点：export _AICLI_API_BASE（及 _AICLI_API_KEY、_AICLI_LLM_MODEL），见 .env.example「十」"
             elif name == "vision_describe":
                 expr = f"vision_describe({json.dumps(img)}, '用一句话描述画面')"
             else:
@@ -170,12 +226,16 @@ def main() -> int:
                 )
             elif name == "audio_transcribe_only":
                 expr = f"audio_transcribe_only({json.dumps(aud)})"
+            elif not _smoke_has_llm_endpoint():
+                skip_reason = "缺推理端点：audio_transcribe 需 LLM 总结；export _AICLI_* 见 .env.example「十」"
             else:
                 expr = f"audio_transcribe({json.dumps(aud)}, '用一句话总结', language='zh')"
         elif name == "video_summarize":
             vid = (os.getenv("OMLXCLI_SMOKE_VIDEO_PATH") or "").strip()
             if not vid or not Path(vid).is_file():
                 skip_reason = "无视频：设置 OMLXCLI_SMOKE_VIDEO_PATH=/绝对路径/样例.mp4"
+            elif not _smoke_has_llm_endpoint():
+                skip_reason = "缺推理端点：export _AICLI_API_BASE 等，见 .env.example「十」"
             else:
                 # 音轨缺 mlx-whisper 时 skill 内部会跳过转写，仍可做画面分析
                 expr = f"video_summarize({json.dumps(vid)}, frames=2, prompt='一句话概括', language='zh')"
@@ -188,6 +248,12 @@ def main() -> int:
             continue
         n, st, detail = run(name, expr)
         rows.append((n, st, detail, expr))
+
+    for fp in cleanup_files:
+        try:
+            fp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     # 清理笔记（见 `.omlxcli/skills/notes.py` → `.omlxcli/notes/`）
     try:

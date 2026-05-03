@@ -153,7 +153,7 @@ oMLX-CLI/
 | Command | Purpose |
 |---------|---------|
 | `./scripts/dev_check.sh` | `gen_oi_tool_map.py --check` + full `unittest` suite (aligns with most of CI). |
-| `python3 scripts/smoke_all_skills.py` | Optional full skills smoke; env vars in `Skills_README.md` §8.1. |
+| `python3 scripts/smoke_all_skills.py` | Optional full skills smoke; vars in **`.env.example`** (comment block **「九·1」**) and **`Skills_README.md`** §8.1. |
 | `./.venv/bin/python -m playwright install chromium` | First-time browser install for E2E tests. |
 
 CI (`.github/workflows/ci.yml`): `pip install -r requirements.txt`, Playwright Chromium, `gen_oi_tool_map --check`, unittest **including** Playwright, then `uvicorn` + `scripts/smoke_http.py`. Tests set `OMLXCLI_EVAL_SKIP_HTTP=1` by default for outbound-sensitive cases.

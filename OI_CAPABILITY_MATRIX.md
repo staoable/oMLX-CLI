@@ -54,7 +54,7 @@
 |------|------|------|--------|------------|------|
 | 对话与凭据 | SQLite `vendors` + `resolve_upstream_credentials` | 已实现 | P0 | `upstream_credentials.py`, `session_engine.py`, `oi_runtime_core.py` | — |
 | `GET /api/models` | **必填** `vendor_id` | 已实现 | P0 | `app.py` | — |
-| 模型设置 CRUD + probe | 有 | 已实现 | P1 | `app.py`, `session_store.py`, `webui` | **`docs/API.md`** |
+| 模型设置 CRUD + 拉取模型列表（probe） | 有 | 已实现 | P1 | `app.py`, `session_store.py`, `webui` | **`docs/API.md`** |
 | 默认 / 占位 model | `DEFAULT_SESSION_MODEL_ID` + `vendors.default_model` | 已实现 | P1 | `session_engine.py` | — |
 | 上下文窗口估算 | 内存启发式 | 部分实现 | P2 | `oi_runtime_core.py` | 可选：按模型配置 |
 
