@@ -50,7 +50,7 @@ This is a **deliverable web application** (session engine, SQLite persistence, e
 | **Safety** | Command blacklist, high-risk confirmation UI, workspace write-boundary checks. |
 | **Context** | Layers: `pinned` / `working` / `archived`; checkpoints (append/replace); budget trim; auto-summary; injection audit rows. |
 | **Observability** | JSON logs (`LOGGING_SPEC.md`), `x-request-id`, REST APIs for executions and context injections. |
-| **Skills** | PDF (PyMuPDF + fallbacks), weather, web read/search, notes, repo grep, vision, video; **Apple Silicon**: optional **mlx-whisper** for local STT (see `requirements.txt` markers). |
+| **Skills** | PDF, weather, web, notes, repo grep, vision, audio/video; **CSV/TSV summary**, **xlsx sample**, **read-only git**, **JSON/YAML pick**, **docx to text** (see **openpyxl / PyYAML / python-docx** in `requirements.txt`); **Apple Silicon**: optional **mlx-whisper** for local STT. |
 
 ---
 

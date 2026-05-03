@@ -8,6 +8,11 @@ playwright>=1.49
 # PDF：`pdf_meta` / `pdf_read` 等优先 PyMuPDF；无则回退 poppler/pypdf（CI 与全技能一致）
 pymupdf>=1.24.0
 
+# Skills：表格与 Office（csv_tsv_summary / xlsx_sample / structured_pick / docx_to_text）
+openpyxl>=3.1.0
+python-docx>=1.1.0
+PyYAML>=6.0.1
+
 # 本地 STT：`audio_transcribe*` 与 `video_summarize` 音轨转写依赖 Apple MLX 官方包。
 # 仅 Apple Silicon macOS 有 PyPI 轮子；Linux/Intel Mac 不会安装此行（CI 不受影响）。
 mlx-whisper>=0.4.0; sys_platform == "darwin" and platform_machine == "arm64"

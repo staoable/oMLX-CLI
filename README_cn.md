@@ -50,7 +50,7 @@
 | **安全** | 命令黑名单、高危操作确认弹窗、工作区写路径边界检查。 |
 | **上下文** | 分层：`pinned` / `working` / `archived`；checkpoint（追加/替换）；预算裁剪与自动摘要；上下文注入审计。 |
 | **可观测** | 结构化 JSON 日志（见 `LOGGING_SPEC.md`）、`x-request-id`、执行与注入相关 REST 接口。 |
-| **Skills** | PDF（PyMuPDF + 回退）、天气、网页读取/搜索、笔记、`repo_grep`、视觉、视频等；**Apple Silicon** 上可按 `requirements.txt` 条件安装 **mlx-whisper** 做本地语音转写。 |
+| **Skills** | PDF、天气、网页、笔记、`repo_grep`、视觉、音视频；**CSV/TSV 摘要**、**xlsx 抽样**、**只读 git**、**JSON/YAML 点路径**、**docx 抽文本**（依赖见 `requirements.txt` 中 **openpyxl / PyYAML / python-docx**）；**Apple Silicon** 上可选 **mlx-whisper** 本地转写。 |
 
 ---
 

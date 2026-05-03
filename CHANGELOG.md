@@ -2,6 +2,17 @@
 
 版本号与 `webapi/app:app` 的 FastAPI **`version`** 对齐。
 
+## [未发布]
+
+### 新增
+
+- **Skills**：**`csv_tsv_summary`**（CSV/TSV 摘要）、**`xlsx_sample`**（xlsx 只读抽样）、**`git_snapshot`**（`git log` / `diff` / `show` 只读）、**`structured_pick`**（JSON/YAML 点路径取值）、**`docx_to_text`**（.docx 抽文本）；源码见 **`.omlxcli/skills/spreadsheet.py`**、**`structured_data.py`**、**`git_readonly.py`**、**`docx_read.py`**；单测 **`tests/test_workspace_skills.py`**。
+- **依赖**：根 **`requirements.txt`** 增加 **openpyxl**、**python-docx**、**PyYAML**（与 CI / `bootstrap` 一致安装）。
+
+### 文档
+
+- **`Skills_README.md`**、**`OI_CAPABILITY_MATRIX.md`**、**`IMPLEMENTATION_PLAN.md`**、**`README_cn.md` / `README_en.md`**、**`.env.example`** 已补充与上述 skills 一致的说明。
+
 ## [0.2.0] — 2026-05-02
 
 ### 变更

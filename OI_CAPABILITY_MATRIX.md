@@ -70,6 +70,7 @@
 | manifest + AST 校验 | 有 | 已实现 | P0 | `skill_manifest.py`, `manifests/skills.json` | — |
 | Web 下 `_AICLI_*` 注入 | `_skill_llm_env` | 已实现 | P0 | `session_engine.py` | 与会话上游一致 |
 | `OI_TOOL_MAP.json` 生成链 | `gen_oi_tool_map.py` + 单测 | 已实现 | P0 | `scripts/`, `tests/test_oi_tool_map_skills.py` | — |
+| 表格 / Git / JSON·YAML / Word | **`csv_tsv_summary`**、**`xlsx_sample`**、**`git_snapshot`**、**`structured_pick`**、**`docx_to_text`** | 已实现 | P0 | `.omlxcli/skills/spreadsheet.py` 等、`tests/test_workspace_skills.py` | 依赖 **openpyxl**、**python-docx**、**PyYAML**（`requirements.txt`） |
 | 沙箱 | AST 限制 + 超时 `OMLXCLI_RUN_SKILL_TIMEOUT_SEC` | 部分实现 | P0 | `skill_runner.py` | 可选：更强隔离 |
 
 ---

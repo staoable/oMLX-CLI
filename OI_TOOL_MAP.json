@@ -17,8 +17,20 @@
       "invoke": "run_skill"
     },
     {
+      "name": "csv_tsv_summary",
+      "source_file": "spreadsheet.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
       "name": "date_now",
       "source_file": "clock.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "docx_to_text",
+      "source_file": "docx_read.py",
       "web_status": "implemented",
       "invoke": "run_skill"
     },
@@ -31,6 +43,12 @@
     {
       "name": "files_search",
       "source_file": "files.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "git_snapshot",
+      "source_file": "git_readonly.py",
       "web_status": "implemented",
       "invoke": "run_skill"
     },
@@ -89,6 +107,12 @@
       "invoke": "run_skill"
     },
     {
+      "name": "structured_pick",
+      "source_file": "structured_data.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
       "name": "video_summarize",
       "source_file": "video.py",
       "web_status": "implemented",
@@ -127,6 +151,12 @@
     {
       "name": "web_search",
       "source_file": "web_search.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "xlsx_sample",
+      "source_file": "spreadsheet.py",
       "web_status": "implemented",
       "invoke": "run_skill"
     }

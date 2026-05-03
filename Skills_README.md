@@ -21,6 +21,11 @@
 | `audio_transcribe` | 音频转写 + 基于转写由 LLM 回答 | `.omlxcli/skills/audio.py` |
 | `audio_transcribe_only` | 仅音频转写为文字，不调 LLM | `.omlxcli/skills/audio.py` |
 | `date_now` | 返回本机当前日期、时间、星期、时区等 | `.omlxcli/skills/clock.py` |
+| `csv_tsv_summary` | CSV/TSV 列名、行数、抽样行与数值列 min/max/mean | `.omlxcli/skills/spreadsheet.py` |
+| `xlsx_sample` | xlsx/xlsm 只读抽样（openpyxl read_only） | `.omlxcli/skills/spreadsheet.py` |
+| `structured_pick` | 本地 JSON/YAML 点路径取值（`yaml.safe_load`） | `.omlxcli/skills/structured_data.py` |
+| `git_snapshot` | 仓库内只读 `git log` / `diff` / `show` | `.omlxcli/skills/git_readonly.py` |
+| `docx_to_text` | .docx 段落与表格抽纯文本 | `.omlxcli/skills/docx_read.py` |
 | `files_read_chunk` | 按行范围读取文件分块（大文件友好） | `.omlxcli/skills/files.py` |
 | `files_search` | 按文件名或内容搜索，返回绝对路径列表 | `.omlxcli/skills/files.py` |
 | `note_list` | 列出笔记目录下文件名 | `.omlxcli/skills/notes.py` |
@@ -53,6 +58,7 @@
 | 兼容路径 | 若默认目录不存在，会尝试 **`.aicli/skills`**（见 `webapi/skill_runner.resolve_skills_dir`） |
 | run_skill 超时 | **`OMLXCLI_RUN_SKILL_TIMEOUT_SEC`**（秒，`0` 表示不限制；默认 `120`），见 `webapi/skill_runner.py` |
 | 全量环境变量说明 | 仓库根 **`.env.example`**（逐项中文注释；Web 模型上游在 SQLite，不在此配 Base/Key）；可复制为 **`.env.local`**，`webapi/app.py` 启动时自动加载 |
+| 表格与 Office skills | **`requirements.txt`** 含 **openpyxl**、**python-docx**、**PyYAML**（CI/bootstrap 安装）；缺包时对应 skill 会抛出可读的 `RuntimeError` |
 | Web 下需 LLM 的技能 | **`webapi/session_engine._skill_llm_env`** 在 `run_skill` 前注入 **`_AICLI_API_BASE`**、**`_AICLI_API_KEY`**、**`_AICLI_LLM_MODEL`**（与会话当前模型设置一致）；技能内应读 `_AICLI_*`，勿依赖进程级 `OI_API_*` |
 
 部署时在 `.env` / `.env.local` / systemd / K8s 等环境中设置变量；本地推荐维护 **`.env.local`**（已 `.gitignore`）。

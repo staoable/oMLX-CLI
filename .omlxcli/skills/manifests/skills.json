@@ -127,6 +127,41 @@
       "permissions": ["filesystem_read", "subprocess"],
       "min_positional_args": 1,
       "max_total_args": 10
+    },
+    "csv_tsv_summary": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 8,
+      "changelog": "CSV/TSV 摘要"
+    },
+    "xlsx_sample": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 8,
+      "changelog": "xlsx 只读抽样"
+    },
+    "git_snapshot": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read", "subprocess"],
+      "min_positional_args": 1,
+      "max_total_args": 12,
+      "changelog": "git log/diff/show 只读"
+    },
+    "structured_pick": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 12,
+      "changelog": "JSON/YAML 点路径"
+    },
+    "docx_to_text": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 6,
+      "changelog": "docx 抽文本"
     }
   }
 }

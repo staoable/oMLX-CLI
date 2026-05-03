@@ -46,6 +46,7 @@
 | Agent 评测 JSON | `tests/fixtures/agent_eval_scenarios.json`（**35** 条）、`tests/test_agent_maturity.py` |
 | 策略评测 JSON | `tests/fixtures/policy_eval_scenarios.json`（**13** 条） |
 | Skills 映射校验 | `scripts/gen_oi_tool_map.py`、`tests/test_oi_tool_map_skills.py` |
+| 办公/数据类 skills | `.omlxcli/skills/spreadsheet.py`（`csv_tsv_summary`、`xlsx_sample`）、`structured_data.py`（`structured_pick`）、`git_readonly.py`（`git_snapshot`）、`docx_read.py`（`docx_to_text`）；单测 **`tests/test_workspace_skills.py`** |
 | 管理员审计导出 | `GET /api/admin/sessions/{id}/audit-export` + `OMLXCLI_ADMIN_TOKEN` |
 
 ---
