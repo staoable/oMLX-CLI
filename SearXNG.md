@@ -1,6 +1,8 @@
 # SearXNG + Mihomo + V2 Search Gateway 部署与对接手册
 
-本文档记录了从 0 到 1 的部署步骤、配置方法、排障思路，以及给 Agent/Skills 做联网检索对接与测试的方法。
+本文档为**维护者侧**部署笔记（含示例主机名与绝对路径）；与本仓库的通用对接变量以 **`.env.example`** 中 **`OMLXCLI_SEARCH_*` / `OMLXCLI_SEARXNG_URL`** 等为准。
+
+下文记录从 0 到 1 的部署步骤、配置方法、排障思路，以及给 Agent/Skills 做联网检索对接与测试的方法。
 
 ## 1. 架构说明
 

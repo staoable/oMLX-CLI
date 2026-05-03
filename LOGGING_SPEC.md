@@ -39,6 +39,12 @@
   - 字段：`session_id`, `exec_type`, `command`, `exit_code`, `duration_ms?`
 - `context_injection_recorded`
   - 字段：`session_id`, `total_rows`, `dropped_rows`, `input_chars`
+- `vendor_created`
+  - 字段：`vendor_id`, `slug`（不含 `api_key`）
+- `vendor_updated`
+  - 字段：`vendor_id`
+- `vendor_deleted`
+  - 字段：`vendor_id`
 
 ## 3. 关联关系
 
@@ -46,8 +52,6 @@
 - `session_id`：串联同一会话中的消息、执行、确认等行为。
 - 若同时存在 `request_id` 与 `session_id`，优先用于跨层排障。
 
-## 4. 下一步建议（v2）
+## 4. 可选扩展（未实现）
 
-- 增加统一字段：`event_version`, `component`, `env`
-- 将 SSE 流事件也纳入结构化日志（delta/metrics/done）
-- 对错误 `detail` 做脱敏处理（避免敏感信息泄露）
+若后续要加强可观测性，可考虑：`event_version` / `component` / `env` 字段；SSE 细粒度事件入库；错误 `detail` 脱敏策略统一化。

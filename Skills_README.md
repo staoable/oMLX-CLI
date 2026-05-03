@@ -1,6 +1,6 @@
 # Skills_README：Skills 管理与开发部署说明
 
-> 本文档为仓库内 **Skills 工程** 的权威说明（文件名 **`Skills_README.md`**）。与根目录 **`README.md`**（仓库首页）、**`README_cn.md` / `README_en.md`**（完整说明）、`OI_CAPABILITY_MATRIX.md`、`OI_TOOL_MAP.json` 互补：首页与双语 README 偏整体产品与上手，本文偏 **开发、注册、生成映射与部署**。
+> 本文档为仓库内 **Skills 工程** 的权威说明（文件名 **`Skills_README.md`**）。与 **`README.md`**、**`README_cn.md` / `README_en.md`**、**`OI_CAPABILITY_MATRIX.md`**、**`OI_TOOL_MAP.json`**、**`docs/API.md`**（HTTP 契约）互补：首页与双语 README 偏整体产品与上手，本文偏 **开发、注册、生成映射与部署**。
 
 ---
 
@@ -52,7 +52,8 @@
 | 自定义目录 | 环境变量 **`OMLXCLI_SKILLS_DIR`**（目录须存在且含 **`manifests/skills.json`**） |
 | 兼容路径 | 若默认目录不存在，会尝试 **`.aicli/skills`**（见 `webapi/skill_runner.resolve_skills_dir`） |
 | run_skill 超时 | **`OMLXCLI_RUN_SKILL_TIMEOUT_SEC`**（秒，`0` 表示不限制；默认 `120`），见 `webapi/skill_runner.py` |
-| 全量环境变量说明 | 仓库根目录 **`.env.example`**（逐项中文注释）；开发可复制为 **`.env.local`**，`webapi/app.py` 启动时会自动加载 |
+| 全量环境变量说明 | 仓库根 **`.env.example`**（逐项中文注释；Web 模型上游在 SQLite，不在此配 Base/Key）；可复制为 **`.env.local`**，`webapi/app.py` 启动时自动加载 |
+| Web 下需 LLM 的技能 | **`webapi/session_engine._skill_llm_env`** 在 `run_skill` 前注入 **`_AICLI_API_BASE`**、**`_AICLI_API_KEY`**、**`_AICLI_LLM_MODEL`**（与会话当前模型设置一致）；技能内应读 `_AICLI_*`，勿依赖进程级 `OI_API_*` |
 
 部署时在 `.env` / `.env.local` / systemd / K8s 等环境中设置变量；本地推荐维护 **`.env.local`**（已 `.gitignore`）。
 
@@ -100,7 +101,7 @@ CI 与本地全量测试包含 **Playwright** 对 `/ui/` 的静态冒烟（见 `
 | 5 | （可选）在 **`tests/fixtures/agent_eval_scenarios.json`** 增加评测用例；合并前 **`python3 -m unittest discover -s tests -p "test_*.py"`**。 |
 | 6 | 更新本节 **§2 技能一览表**（名称、简述、路径与 manifest 一致）。 |
 
-无需改 **`webapi/session_engine.py`** 白名单：模块加载成功即可进入注册表。
+无需为「注册进工具表」改 **`webapi/session_engine.py`** 白名单：模块加载成功即可进入注册表。若技能需 Web 会话中的上游 LLM，由 **`_skill_llm_env`** 统一注入 **`_AICLI_*`**，一般也不用手改白名单。
 
 ---
 
@@ -169,10 +170,7 @@ python3 scripts/smoke_all_skills.py
 
 ## 12. 维护约定
 
-- 与 **`IMPLEMENTATION_PLAN.md`**、**`OI_CAPABILITY_MATRIX.md`** 联动更新能力状态。
+- 与 **`OI_CAPABILITY_MATRIX.md`**、**`docs/API.md`**（若技能影响对外行为）联动更新。
 - **新增技能**：**源码 + manifest** → **`gen_oi_tool_map.py --write`**；否则单测 / **`--check`** 失败。
-- **重命名本文档或技能表**：同步更新全仓指向 **`Skills_README.md`** 的链接。
 
 变更本规范时，在本节追加 **日期与摘要** 即可。
-
-- **2026-05-02**：`skill-readme.md` 更名为 **`Skills_README.md`**，新增 **§2 当前技能一览** 表。

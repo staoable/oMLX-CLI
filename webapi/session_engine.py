@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 import re
 import subprocess
 import time
@@ -24,8 +25,9 @@ from webapi.engine_protocol import (
 from webapi.config import load_execution_policy_config
 from webapi.execution_policy import check_command_policy
 from webapi.logging_utils import log_event
-from webapi.session_store import SessionStore
+from webapi.session_store import SessionRecord, SessionStore
 from webapi.skill_runner import load_skills_registry, run_skill_call
+from webapi.upstream_credentials import resolve_upstream_credentials
 
 
 @dataclass(slots=True)
@@ -39,6 +41,28 @@ class SessionRunConfig:
 
 
 _DEFAULT_AUTO_TITLES = frozenset({"新会话", "新建会话", "新对话"})
+
+# 新建会话默认 model 字符串，以及旧占位名（local/default/空）的最终回退；不读 OI_MODEL 环境变量。
+DEFAULT_SESSION_MODEL_ID = "Qwen3.5-35B-A3B-8bit"
+
+
+@contextmanager
+def _skill_llm_env(*, api_base: str, api_key: str, model: str):
+    """技能代码通过 `_AICLI_*` 读取与当前会话一致的推理端点（与旧 OI_* 解耦）。"""
+    keys = ("_AICLI_API_BASE", "_AICLI_API_KEY", "_AICLI_LLM_MODEL")
+    prev: dict[str, str | None] = {k: os.environ.get(k) for k in keys}
+    try:
+        os.environ["_AICLI_API_BASE"] = (api_base or "").strip().rstrip("/")
+        os.environ["_AICLI_API_KEY"] = (api_key or "").strip() or "EMPTY"
+        os.environ["_AICLI_LLM_MODEL"] = (model or "").strip() or "default_model"
+        yield
+    finally:
+        for k in keys:
+            old = prev[k]
+            if old is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old
 
 
 def _approx_tokens(text: str) -> int:
@@ -56,13 +80,21 @@ class OiSessionEngine:
         self.context_manager = context_manager
         self._checkpoint_at_msg_count: dict[str, int] = {}
 
-    @staticmethod
-    def _effective_model(stored: str) -> str:
-        """oMLX 不接受占位名 local；旧会话可能仍存 local，这里统一回落到环境或可用默认。"""
-        m = (stored or "").strip()
-        if m.lower() in ("local", "default", ""):
-            return os.getenv("OI_MODEL", "Qwen3.5-35B-A3B-8bit")
-        return m
+    def _resolve_effective_model(self, session: SessionRecord) -> str:
+        """旧数据或占位名 local/default/空：优先用已绑定模型设置的 default_model，否则用内置默认 id。"""
+        m = (session.model or "").strip()
+        if m.lower() not in ("local", "default", ""):
+            return m
+        vid = (getattr(session, "vendor_id", None) or "").strip()
+        if vid:
+            try:
+                v = self.store.get_vendor(vid)
+                dm = (v.default_model or "").strip()
+                if dm:
+                    return dm
+            except KeyError:
+                pass
+        return DEFAULT_SESSION_MODEL_ID
 
     @staticmethod
     def default_config(model: str, api_base: str, api_key: str) -> SessionRunConfig:
@@ -84,14 +116,23 @@ class OiSessionEngine:
         attachments: list[dict[str, Any]] | None = None,
     ) -> Generator[dict[str, Any], None, str]:
         session = self.store.get_session(session_id)
-        resolved_model = self._effective_model(session.model)
+        resolved_model = self._resolve_effective_model(session)
         if resolved_model != session.model:
             self.store.update_session(session_id, model=resolved_model)
             session = self.store.get_session(session_id)
+        try:
+            api_base, api_key = resolve_upstream_credentials(session, self.store)
+        except KeyError:
+            msg = "会话绑定的模型设置不存在或已删除，请在设置中重新选择。"
+        except RuntimeError as exc:
+            msg = str(exc)
+            self.store.add_message(session_id=session_id, role="assistant", content=msg, kind="error")
+            yield {"type": "error", "content": msg}
+            return msg
         config = self.default_config(
             model=resolved_model,
-            api_base=session.api_base,
-            api_key=os.getenv("OI_API_KEY", "not-needed"),
+            api_base=api_base,
+            api_key=api_key,
         )
         history = self.store.list_messages(session_id, limit=300)
         budget_chars = max(4096, int(os.getenv("OMLXCLI_CONTEXT_BUDGET_CHARS", "24000")))
@@ -519,7 +560,12 @@ class OiSessionEngine:
                     final_answer = "技能调用为空，未执行。"
                     break
                 yield {"type": "exec_step", "command": f"skill: {skill_expr}", "status": "running"}
-                skill_ret = run_skill_call(skill_expr, skill_funcs)
+                with _skill_llm_env(
+                    api_base=config.api_base,
+                    api_key=config.api_key,
+                    model=config.model,
+                ):
+                    skill_ret = run_skill_call(skill_expr, skill_funcs)
                 log_event(
                     "exec_finished",
                     session_id=session_id,

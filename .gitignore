@@ -1,7 +1,63 @@
-.omlxcli/web/
-.omlxcli/**/*.db
-.omlxcli/**/__pycache__/
-__pycache__/
-# 本地环境与凭据（勿提交；全量键说明见 .env.example）
+# =============================================================================
+# 勿提交敏感数据与本地生成物（提交前可执行 git status 自查）
+# =============================================================================
+
+# --- 环境变量与凭据（含 API Key、网关密码等）---
 .env
 .env.local
+.env.*.local
+.env.backup
+.env.bak
+.env.old
+.envrc
+# 若使用 direnv：.envrc 已列上；direnv 还可能用 .envrc.local
+.envrc.local
+
+# 模板必须保留在版本库中（若曾误加宽泛规则，可用下一行取消忽略）
+!.env.example
+
+# --- Web / 会话数据（SQLite 含 vendors.api_key、消息与审计等）---
+.omlxcli/web/
+.omlxcli/**/*.db
+# 自定义 OMLXCLI_DATA_DIR 若指向仓库内时可能出现的库文件
+sessions.db
+*.sqlite
+*.sqlite3
+
+# --- 技能写入的本地笔记（可能含用户/模型私密内容）---
+.omlxcli/notes/
+
+# --- Python ---
+__pycache__/
+.omlxcli/**/__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# --- 常见密钥 / 令牌文件（若在仓库根生成）---
+*.pem
+*.p12
+*.key
+id_rsa
+id_rsa.pub
+credentials.json
+token.json
+serviceAccount.json
+
+# --- 工具与系统杂项 ---
+.DS_Store
+Thumbs.db
+.mypy_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# --- IDE / 本地状态（可能含绝对路径或机器相关配置）---
+.cursor/
+.idea/
+*.swp
+*.swo
+*~

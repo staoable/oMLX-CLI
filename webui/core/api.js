@@ -1,5 +1,12 @@
+/** 将 `/api/...` 解析为与当前 UI 同部署前缀下的绝对 URL（避免子路径反代时误请求站点根 `/api`）。 */
+export function resolveApiUrl(path) {
+  const rel = String(path || "").replace(/^\/+/, "");
+  const uiDir = new URL("../", import.meta.url);
+  return new URL(`../${rel}`, uiDir).href;
+}
+
 export async function api(path, options = {}) {
-  const res = await fetch(path, {
+  const res = await fetch(resolveApiUrl(path), {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -21,8 +28,14 @@ export async function api(path, options = {}) {
   return res.json();
 }
 
-export async function fetchModelsForBase(apiBase) {
-  const base = (apiBase || "").trim() || "http://127.0.0.1:8000/v1";
-  const q = new URLSearchParams({ api_base: base });
+export async function fetchModelsForVendor(vendorId) {
+  const q = new URLSearchParams({ vendor_id: String(vendorId || "").trim() });
   return api(`/api/models?${q.toString()}`);
+}
+
+export async function probeVendor(apiBase, apiKey) {
+  return api("/api/vendors/probe", {
+    method: "POST",
+    body: JSON.stringify({ api_base: apiBase, api_key: apiKey }),
+  });
 }

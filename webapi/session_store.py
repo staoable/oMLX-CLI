@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+import unicodedata
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -23,6 +25,7 @@ class SessionRecord:
     workspace_path: str
     model: str
     api_base: str
+    vendor_id: str | None
     auto_run: bool
     execution_enabled: bool
     confirm_each: bool
@@ -32,6 +35,18 @@ class SessionRecord:
     created_at: str
     updated_at: str
     last_active_at: str
+
+
+@dataclass(slots=True)
+class VendorRecord:
+    id: str
+    name: str
+    slug: str
+    api_base: str
+    default_model: str
+    api_key: str
+    created_at: str
+    updated_at: str
 
 
 class SessionStore:
@@ -152,6 +167,7 @@ class SessionStore:
             self._migrate_messages(conn)
             self._migrate_executions(conn)
             self._migrate_contexts(conn)
+            self._migrate_vendors(conn)
 
     def _migrate_sessions(self, conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
@@ -175,6 +191,27 @@ class SessionStore:
             conn.execute(
                 "ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
             )
+        if "vendor_id" not in cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN vendor_id TEXT")
+
+    def _migrate_vendors(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vendors (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                slug TEXT NOT NULL UNIQUE,
+                api_base TEXT NOT NULL,
+                default_model TEXT NOT NULL DEFAULT '',
+                api_key TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(vendors)").fetchall()}
+        if cols and "api_key" not in cols:
+            conn.execute("ALTER TABLE vendors ADD COLUMN api_key TEXT NOT NULL DEFAULT ''")
 
     def _migrate_contexts(self, conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(contexts)").fetchall()}
@@ -264,17 +301,33 @@ class SessionStore:
         model: str,
         api_base: str,
         auto_run: bool,
+        vendor_id: str | None = None,
     ) -> SessionRecord:
         now = _now_iso()
         session_id = str(uuid.uuid4())
+        api_out = (api_base or "").strip().rstrip("/")
+        vid_out = (vendor_id or "").strip() or None
         with self._conn() as conn:
             conn.execute(
                 """
                 INSERT INTO sessions (
-                    id, title, title_locked, workspace_path, model, api_base, auto_run, execution_enabled, confirm_each, pending_command, summary, archived, created_at, updated_at, last_active_at
-                ) VALUES (?, ?, 0, ?, ?, ?, ?, 0, 1, '', '', 0, ?, ?, ?)
+                    id, title, title_locked, workspace_path, model, api_base, vendor_id,
+                    auto_run, execution_enabled, confirm_each, pending_command, summary, archived,
+                    created_at, updated_at, last_active_at
+                ) VALUES (?, ?, 0, ?, ?, ?, ?, ?, 0, 1, '', '', 0, ?, ?, ?)
                 """,
-                (session_id, title, workspace_path, model, api_base, int(auto_run), now, now, now),
+                (
+                    session_id,
+                    title,
+                    workspace_path,
+                    model,
+                    api_out,
+                    vid_out,
+                    int(auto_run),
+                    now,
+                    now,
+                    now,
+                ),
             )
         return self.get_session(session_id)
 
@@ -308,6 +361,7 @@ class SessionStore:
             "workspace_path",
             "model",
             "api_base",
+            "vendor_id",
             "auto_run",
             "execution_enabled",
             "confirm_each",
@@ -315,7 +369,15 @@ class SessionStore:
             "summary",
             "archived",
         }
-        fields = {k: v for k, v in updates.items() if k in allowed and v is not None}
+        fields: dict[str, Any] = {}
+        for k, v in updates.items():
+            if k not in allowed:
+                continue
+            if k == "vendor_id":
+                fields[k] = None if v in (None, "") else str(v)
+                continue
+            if v is not None:
+                fields[k] = v
         if "title_locked" in fields:
             fields["title_locked"] = int(bool(fields["title_locked"]))
         if "execution_enabled" in fields:
@@ -701,6 +763,180 @@ class SessionStore:
             out.reverse()
         return out
 
+    def list_vendors(self) -> list[VendorRecord]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM vendors ORDER BY name COLLATE NOCASE ASC"
+            ).fetchall()
+        return [self._row_to_vendor(r) for r in rows]
+
+    def count_vendors(self) -> int:
+        with self._conn() as conn:
+            row = conn.execute("SELECT COUNT(*) AS c FROM vendors").fetchone()
+        return int(row["c"]) if row else 0
+
+    def get_vendor(self, vendor_id: str) -> VendorRecord:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM vendors WHERE id = ?", (vendor_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Vendor not found: {vendor_id}")
+        return self._row_to_vendor(row)
+
+    def get_vendor_by_slug(self, slug: str) -> VendorRecord | None:
+        s = (slug or "").strip().lower()
+        if not s:
+            return None
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM vendors WHERE slug = ?", (s,)).fetchone()
+        return self._row_to_vendor(row) if row else None
+
+    def create_vendor(
+        self,
+        *,
+        name: str,
+        slug: str,
+        api_base: str,
+        default_model: str = "",
+        api_key: str = "",
+    ) -> VendorRecord:
+        self._validate_vendor_slug(slug)
+        now = _now_iso()
+        vid = str(uuid.uuid4())
+        base = (api_base or "").strip()
+        if not base:
+            raise ValueError("api_base 不能为空")
+        key = (api_key or "").strip()
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO vendors (id, name, slug, api_base, default_model, api_key, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    vid,
+                    (name or "").strip() or slug,
+                    slug.strip().lower(),
+                    base.rstrip("/"),
+                    (default_model or "").strip(),
+                    key,
+                    now,
+                    now,
+                ),
+            )
+        return self.get_vendor(vid)
+
+    def update_vendor(self, vendor_id: str, **updates: Any) -> VendorRecord:
+        allowed = {"name", "api_base", "default_model", "api_key"}
+        fields: dict[str, Any] = {}
+        for k, v in updates.items():
+            if k not in allowed or v is None:
+                continue
+            fields[k] = v
+        if "api_base" in fields:
+            fields["api_base"] = str(fields["api_base"]).strip().rstrip("/")
+            if not fields["api_base"]:
+                raise ValueError("api_base 不能为空")
+        if "name" in fields:
+            fields["name"] = str(fields["name"]).strip()
+        if "default_model" in fields:
+            fields["default_model"] = str(fields["default_model"]).strip()
+        if "api_key" in fields:
+            fields["api_key"] = str(fields["api_key"] or "").strip()
+        if not fields:
+            return self.get_vendor(vendor_id)
+        fields["updated_at"] = _now_iso()
+        keys = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [vendor_id]
+        with self._conn() as conn:
+            cur = conn.execute(f"UPDATE vendors SET {keys} WHERE id = ?", values)
+            if cur.rowcount == 0:
+                raise KeyError(f"Vendor not found: {vendor_id}")
+        return self.get_vendor(vendor_id)
+
+    def delete_vendor(self, vendor_id: str) -> None:
+        if self.count_sessions_for_vendor(vendor_id) > 0:
+            raise ValueError("仍有会话绑定该模型设置，无法删除")
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM vendors WHERE id = ?", (vendor_id,))
+            if cur.rowcount == 0:
+                raise KeyError(f"Vendor not found: {vendor_id}")
+
+    def count_sessions_for_vendor(self, vendor_id: str) -> int:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM sessions WHERE vendor_id = ?",
+                (vendor_id,),
+            ).fetchone()
+        return int(row["c"]) if row else 0
+
+    @staticmethod
+    def _validate_vendor_slug(slug: str) -> None:
+        s = (slug or "").strip().lower()
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", s):
+            raise ValueError(
+                "slug 须为小写字母开头，仅含小写字母、数字、下划线，长度 1～63"
+            )
+
+    @staticmethod
+    def slug_from_display_name(name: str) -> str:
+        """由展示名生成合法 slug 候选（小写、字母开头）；不含唯一性保证。"""
+        raw = (name or "").strip().lower()
+        s = unicodedata.normalize("NFKD", raw)
+        s = s.encode("ascii", "ignore").decode("ascii")
+        s = re.sub(r"[^a-z0-9]+", "_", s)
+        s = re.sub(r"_+", "_", s).strip("_")
+        if not s:
+            s = "vendor"
+        if not ("a" <= s[0] <= "z"):
+            s = "v" + s
+        s = re.sub(r"[^a-z0-9_]", "", s)
+        if not s:
+            s = "vendor"
+        if not ("a" <= s[0] <= "z"):
+            s = "v" + s
+        if len(s) > 63:
+            s = s[:63].rstrip("_")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", s):
+            s = "vendor"
+        return s
+
+    def allocate_unique_vendor_slug(self, display_name: str) -> str:
+        """根据展示名生成 DB 内唯一的 slug（供创建供应商时调用）。"""
+        base = SessionStore.slug_from_display_name(display_name)
+        # 为 `_` + 序号后缀预留空间（如 `_9999`）
+        max_base_len = 63 - 6
+        if len(base) > max_base_len:
+            base = base[:max_base_len].rstrip("_") or "vendor"
+            if not re.fullmatch(r"[a-z][a-z0-9_]{0,62}", base):
+                base = "vendor"
+        with self._conn() as conn:
+            for i in range(0, 10_000):
+                suffix = "" if i == 0 else f"_{i + 1}"
+                candidate = base + suffix
+                if len(candidate) > 63:
+                    raise RuntimeError("allocate_unique_vendor_slug: candidate too long")
+                row = conn.execute(
+                    "SELECT 1 FROM vendors WHERE slug = ?", (candidate,)
+                ).fetchone()
+                if row is None:
+                    return candidate
+        raise RuntimeError("allocate_unique_vendor_slug: too many collisions")
+
+    @staticmethod
+    def _row_to_vendor(row: sqlite3.Row) -> VendorRecord:
+        keys = row.keys()
+        api_key = str(row["api_key"] or "") if "api_key" in keys else ""
+        return VendorRecord(
+            id=row["id"],
+            name=row["name"],
+            slug=row["slug"],
+            api_base=row["api_base"],
+            default_model=row["default_model"] or "",
+            api_key=api_key,
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
     @staticmethod
     def _row_to_session(row: sqlite3.Row) -> SessionRecord:
         keys = row.keys()
@@ -709,6 +945,9 @@ class SessionStore:
         confirm_each = bool(row["confirm_each"]) if "confirm_each" in keys else True
         pending_command = str(row["pending_command"]) if "pending_command" in keys else ""
         archived = bool(row["archived"]) if "archived" in keys else False
+        vendor_id = None
+        if "vendor_id" in keys and row["vendor_id"]:
+            vendor_id = str(row["vendor_id"])
         return SessionRecord(
             id=row["id"],
             title=row["title"],
@@ -716,6 +955,7 @@ class SessionStore:
             workspace_path=row["workspace_path"],
             model=row["model"],
             api_base=row["api_base"],
+            vendor_id=vendor_id,
             auto_run=bool(row["auto_run"]),
             execution_enabled=execution_enabled,
             confirm_each=confirm_each,

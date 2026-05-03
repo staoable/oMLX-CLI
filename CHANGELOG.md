@@ -1,30 +1,28 @@
 # 变更日志
 
-本文档遵循简要条目风格；版本号与 `webapi/app:app` 的 FastAPI `version` 字段对齐。
+版本号与 `webapi/app:app` 的 FastAPI **`version`** 对齐。
 
 ## [0.2.0] — 2026-05-02
 
 ### 变更
 
-- 文档：根目录 **`README.md`** 作为仓库首页（宣传 + 快速入口），完整说明拆至 **`README_cn.md`** / **`README_en.md`** 双语维护；`Skills_README.md` 互补说明已更新。
-- 文档：首页 **维护者自测环境表** + **`docs/readme/`** 截图（PNG，**约 900px 宽 / ~370 KB 合计**，便于 GitHub 快速加载）；`README_cn` / `README_en` 有指向说明。
-- 文档：`skill-readme.md` 重命名为 **`Skills_README.md`**，并增加 **manifest 技能一览表**（名称、功能、路径）。
+- **模型设置**：上游 Base / Key / 默认模型存 **`vendors`**（SQLite）；会话 **`vendor_id`** 可选，解绑为 **`null`**；无可用配置时对话返回明确错误。Web 不再依赖 `.env` 中的 `OI_API_BASE` / `OI_API_KEY` / `OI_MODEL`；默认与占位 model 由 **`DEFAULT_SESSION_MODEL_ID`** 与已绑定 **`vendors.default_model`** 决定（见 `.env.example`）。
+- **API**：**`GET /api/models`** 必须 **`vendor_id`**；**`GET /api/vendors/{id}`** 单条含 `api_key` 供编辑回显；列表与写响应默认不含 key；**`POST`/`PATCH /api/vendors`** 可选 **`api_key`**；移除独立 secret 路由；**`slug`** 仅服务端生成。
+- **Skills**：`run_skill` 使用 **`_AICLI_API_BASE`** / **`_AICLI_API_KEY`** / **`_AICLI_LLM_MODEL`**（`_media._llm_endpoint` 不再回退 `OI_API_*`）。
+- **Web**：「模型设置」文案与弹窗；新建/更新保存后清空表单防误 `PATCH`；设置中移除会话级自填 API Base（由绑定行决定）。
 
 ### 新增
 
-- **Playwright 浏览器 E2E**：`tests/test_e2e_playwright_ui.py`（启动 uvicorn 后访问 `/ui/`，断言标题与「新建会话」按钮）；GitHub Actions 安装 Chromium 后与单测一并执行。
-- **本地开发脚本**：`scripts/dev_check.sh`（`gen_oi_tool_map --check` + 全量 `unittest`，默认跳过外网评测类场景）。
-- **run_skill 超时**：`OMLXCLI_RUN_SKILL_TIMEOUT_SEC`（见 `.env.example`）。
-- **环境加载**：`webapi/dotenv_loader.py` 在 `import webapi.app` 时加载 `.env` / `.env.local`。
+- **`webapi/upstream_credentials.py`**；**`webapi/dotenv_loader.py`**（加载 `.env` / `.env.local`，不含把模型密钥写入 `.env`）。
+- **Playwright**：`tests/test_e2e_playwright_ui.py`；CI 安装 Chromium。
+- **`OMLXCLI_RUN_SKILL_TIMEOUT_SEC`**；**`scripts/dev_check.sh`**。
+- 文档：**`README.md`** 首页；**`README_cn.md` / `README_en.md`**；**`Skills_README.md`**；**`docs/readme/`** 截图；**`docs/API.md`**；本 **`CHANGELOG`**。
 
 ### 工程
 
-- CI：`pip install -r requirements.txt` + `playwright install --with-deps chromium`。
-- 仓库根 `requirements.txt` 便于与 CI/bootstrap 统一依赖。
-- **本地 STT**：`requirements.txt` 增加 **Apple Silicon macOS** 条件依赖 **`mlx-whisper`**（Linux CI 不安装）；`bootstrap.sh`、`_media.py` 缺包提示与 `README` / `Skills_README` 冒烟说明对齐「用 `.venv` 解释器」。
-- **PDF**：`requirements.txt` 增加 **`pymupdf`**，使 `pdf_meta` 等与 CI/bootstrap 一致有 PyMuPDF 后端。
-- **天气**：`weather_forecast` 增加 **wttr.in 兜底**；`_http_get_json` 对 **502/503/504** 短时重试，减轻 Open-Meteo 网关抖动。
+- 根 **`requirements.txt`**（含条件 **`mlx-whisper`**、**`pymupdf`**）；CI `pip install -r` + `playwright install`。
+- 天气 **`wttr.in` 兜底**；HTTP 502/503/504 短重试。
 
 ## [0.1.0] — 更早
 
-- MVP：会话、流式对话、run_shell/run_skill、上下文与 checkpoint、执行审计、skills 与 `OI_TOOL_MAP` 生成链等（见 `README.md` / `IMPLEMENTATION_PLAN.md`）。
+- 初版：会话、流式对话、`run_shell` / `run_skill`、上下文与 checkpoint、执行审计、skills 与 `OI_TOOL_MAP` 生成链等。

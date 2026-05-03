@@ -70,7 +70,7 @@ cd oMLX-CLI
 
 ./bootstrap.sh
 cp .env.example .env.local
-# 编辑 .env.local：OI_API_BASE、OI_MODEL、OI_API_KEY（以及 web_search 所需网关等）
+# 编辑 .env.local：数据目录、搜索网关等；Web 对话上游仅在界面「模型设置」→ SQLite（见下节）
 
 ./start_web.sh
 ```
@@ -85,8 +85,9 @@ cp .env.example .env.local
 ## 配置说明
 
 - **模板**：根目录 **`.env.example`**，推荐复制为 **`.env.local`**（已在 `.gitignore`，勿提交密钥）。
-- **加载**：`import webapi.app` 时由 `webapi/dotenv_loader.py` 读取 `.env` 与 `.env.local`；**已在进程环境中的变量不会被文件覆盖**。`./start_web.sh` 也会 `source` 上述文件。
-- **常用变量**：`OI_API_BASE`、`OI_MODEL`、`OI_API_KEY`、`OMLXCLI_DATA_DIR`、`OMLXCLI_DEFAULT_WORKSPACE`、`OMLXCLI_RUN_SKILL_TIMEOUT_SEC`、以及 `OMLXCLI_SEARCH_*` / `OMLXCLI_SEARXNG_URL` 等——逐项说明见 `.env.example` 内注释。
+- **加载**：`import webapi.app` 时由 `webapi/dotenv_loader.py` 读取 `.env` 与 **`.env.local`**；**已在进程环境中的变量不会被文件覆盖**。`./start_web.sh` 也会 `source` 上述文件。
+- **模型设置（Web）**：在界面至少添加一条；**`api_base` / `api_key` / 默认模型** 在 **`sessions.db` 的 `vendors` 表**；会话在设置中绑定后才能对话与使用依赖 LLM 的 Skills。**不要**再在 `.env.local` 里配 `OI_API_BASE` / `OI_API_KEY` 作为 Web 上游（模板已移除；若本地仍有旧键可删掉以免混淆）。
+- **`.env.local` 常用项**：`OMLXCLI_DATA_DIR`、`OMLXCLI_DEFAULT_WORKSPACE`、`OMLXCLI_RUN_SKILL_TIMEOUT_SEC`、`OMLXCLI_CHAT_*`、`OMLXCLI_SEARCH_*` / `OMLXCLI_SEARXNG_URL` 等。新建会话默认 model、旧占位名回退由代码 **`DEFAULT_SESSION_MODEL_ID`** 与已绑定模型设置的 **`default_model`** 决定，**无需** `OI_MODEL`。逐项说明见 **`.env.example`**。
 
 ---
 
@@ -95,11 +96,11 @@ cp .env.example .env.local
 **会话**
 
 - 新建、切换、删除会话；标题自动生成、手动编辑、标题锁定。
-- 每会话独立配置：模型、API、工作目录、执行策略等。
+- 每会话独立配置：模型、**绑定的模型设置**、工作目录、执行策略等。
 
 **模型与流式**
 
-- 动态拉取上游模型列表；SSE 流式输出；完成后写入助手消息与粗粒度性能字段。
+- 在 Web「模型设置」中配置 **`vendors`** 后，按会话绑定的 **`vendor_id`** 调用 **`GET /api/models?vendor_id=…`** 拉取上游列表；SSE 流式输出；完成后写入助手消息与粗粒度性能字段。
 
 **执行代理**
 
@@ -167,15 +168,17 @@ GitHub Actions（`.github/workflows/ci.yml`）：安装依赖与 Playwright Chro
 |------|------|
 | `Skills_README.md` | 技能目录、manifest、`OI_TOOL_MAP`、冒烟变量等。 |
 | `.env.example` | 环境变量逐项中文注释。 |
-| `IMPLEMENTATION_PLAN.md` | 实施计划与优先级。 |
-| `OI_CAPABILITY_MATRIX.md` | 能力矩阵与目标对照。 |
+| `IMPLEMENTATION_PLAN.md` | 能力状态速查、代码落点、可选演进；与矩阵/API 文档联动。 |
+| `OI_CAPABILITY_MATRIX.md` | 能力清单（已实现 / 部分 / 未实现）。 |
+| `docs/API.md` | **HTTP API**（自建前端、SSE、错误格式）；与 **`/docs`** OpenAPI 互补。 |
+| `docs/UPSTREAM_VENDOR_IMPLEMENTATION.md` | 模型设置：凭据、绑定、SQLite 运维（REST 细节见 **`docs/API.md`**）。 |
 | `CHANGELOG.md` | 变更记录（与 `webapi` 中 FastAPI `version` 字段同步）。 |
 
 ---
 
 ## 路线图
 
-长会话 **语义检索**、更完整的产品化体验、持续加固等，以 **`IMPLEMENTATION_PLAN.md`**、**`OI_CAPABILITY_MATRIX.md`** 为权威增量说明。
+路线图与未实现项以 **`OI_CAPABILITY_MATRIX.md`**、**`IMPLEMENTATION_PLAN.md`** §5 为准。
 
 ---
 

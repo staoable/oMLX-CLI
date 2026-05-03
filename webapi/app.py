@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
+import time
 import urllib.error
 import urllib.request
 import uuid
-import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from webapi.context_manager import ContextManager
 from webapi.logging_utils import log_event
-from webapi.session_engine import OiSessionEngine
+from webapi.session_engine import DEFAULT_SESSION_MODEL_ID, OiSessionEngine
 from webapi.session_store import SessionStore
 
 
@@ -39,6 +40,14 @@ DEFAULT_WORKSPACE = os.path.abspath(
 store = SessionStore(str(DB_PATH))
 ctx = ContextManager(store)
 engine = OiSessionEngine(store, ctx)
+
+
+def _vendor_dict(v: Any, *, include_api_key: bool = False) -> dict[str, Any]:
+    """列表与创建/更新响应默认剔除 api_key；单条 GET 含 api_key 供管理界面编辑与测试连接。"""
+    d = asdict(v)
+    if not include_api_key:
+        d.pop("api_key", None)
+    return d
 
 app = FastAPI(title=APP_NAME, version="0.2.0")
 app.add_middleware(
@@ -109,10 +118,12 @@ async def generic_exception_handler(request: Request, exc: Exception):
 class CreateSessionReq(BaseModel):
     title: str = Field(default="新会话")
     workspace_path: str = Field(default=DEFAULT_WORKSPACE)
-    model: str = Field(
-        default_factory=lambda: os.getenv("OI_MODEL", "Qwen3.5-35B-A3B-8bit")
+    model: str = Field(default_factory=lambda: DEFAULT_SESSION_MODEL_ID)
+    api_base: str = Field(default="", description="未选择模型设置时可留空；选择模型设置后由服务端同步")
+    vendor_id: str | None = Field(
+        default=None,
+        description="若设置则从该模型设置同步 api_base；省略则会话暂不绑定模型设置（发消息前须选择并保存）",
     )
-    api_base: str = Field(default_factory=lambda: os.getenv("OI_API_BASE", "http://127.0.0.1:8000/v1"))
     auto_run: bool = True
     execution_enabled: bool = False
     confirm_each: bool = True
@@ -123,10 +134,33 @@ class UpdateSessionReq(BaseModel):
     workspace_path: str | None = None
     model: str | None = None
     api_base: str | None = None
+    vendor_id: str | None = None
     auto_run: bool | None = None
     execution_enabled: bool | None = None
     confirm_each: bool | None = None
     archived: bool | None = None
+
+
+class VendorProbeReq(BaseModel):
+    api_base: str
+    api_key: str
+
+
+class CreateVendorReq(BaseModel):
+    name: str
+    api_base: str
+    default_model: str = ""
+    api_key: str | None = Field(default=None, description="可选；非空则写入 SQLite vendors.api_key")
+
+
+class UpdateVendorReq(BaseModel):
+    name: str | None = None
+    api_base: str | None = None
+    default_model: str | None = None
+    api_key: str | None = Field(
+        default=None,
+        description="若设置则更新 SQLite vendors.api_key（可传空字符串清空）",
+    )
 
 
 class SendMessageReq(BaseModel):
@@ -178,16 +212,12 @@ def healthz() -> dict[str, str]:
     return {"ok": "true"}
 
 
-@app.get("/api/models")
-def list_models(
-    api_base: str | None = Query(
-        default=None,
-        description="OpenAI 兼容根地址，例如 http://127.0.0.1:8000/v1",
-    ),
-) -> dict[str, Any]:
-    """代理上游 /v1/models，供前端下拉选择（避免浏览器跨域）。"""
-    base = (api_base or os.getenv("OI_API_BASE", "http://127.0.0.1:8000/v1")).rstrip("/")
-    key = os.getenv("OI_API_KEY", "not-needed")
+def _fetch_upstream_model_ids(api_base: str, api_key: str) -> tuple[str, list[str]]:
+    """请求上游 GET {base}/models，返回 (规范化 base, 模型 id 列表)。"""
+    base = (api_base or "").strip().rstrip("/")
+    if not base:
+        raise HTTPException(status_code=400, detail="api_base 不能为空")
+    key = (api_key or "").strip() or "not-needed"
     url = base + "/models"
     req = urllib.request.Request(
         url,
@@ -212,18 +242,133 @@ def list_models(
         mid = item.get("id") if isinstance(item, dict) else None
         if isinstance(mid, str) and mid.strip():
             models.append(mid.strip())
-    return {"api_base": base, "models": models}
+    return base, models
+
+
+@app.get("/api/models")
+def list_models(
+    api_base: str | None = Query(
+        default=None,
+        description="已废弃，不再使用",
+    ),
+    vendor_id: str | None = Query(
+        default=None,
+        description="模型设置 id（vendors.id），必填",
+    ),
+) -> dict[str, Any]:
+    """代理上游 /models；密钥来自 SQLite vendors.api_key。"""
+    _ = api_base
+    vid = (vendor_id or "").strip()
+    if not vid:
+        raise HTTPException(status_code=400, detail="请传入 vendor_id（模型设置 id）。")
+    if store.count_vendors() == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="尚未配置任何模型设置。请先在「模型设置」中添加至少一条并保存 API Key。",
+        )
+    try:
+        v = store.get_vendor(vid)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    key = (v.api_key or "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=400,
+            detail=f"模型设置「{v.name}」未保存 API Key，请编辑该条并保存。",
+        )
+    base, models = _fetch_upstream_model_ids(v.api_base, key)
+    return {"api_base": base, "models": models, "vendor_id": v.id}
+
+
+@app.post("/api/vendors/probe")
+def probe_vendor(req: VendorProbeReq) -> dict[str, Any]:
+    """使用请求体中的 api_key 测试连接并拉取模型列表（不写库、不写文件）。"""
+    if not (req.api_key or "").strip():
+        raise HTTPException(status_code=400, detail="api_key 不能为空")
+    base, models = _fetch_upstream_model_ids(req.api_base, req.api_key.strip())
+    return {"ok": True, "api_base": base, "models": models}
+
+
+@app.get("/api/vendors")
+def list_vendors() -> list[dict[str, Any]]:
+    return [_vendor_dict(v) for v in store.list_vendors()]
+
+
+@app.get("/api/vendors/{vendor_id}")
+def get_vendor_row(vendor_id: str) -> dict[str, Any]:
+    try:
+        return _vendor_dict(store.get_vendor(vendor_id), include_api_key=True)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/vendors")
+def create_vendor_row(req: CreateVendorReq) -> dict[str, Any]:
+    try:
+        slug = store.allocate_unique_vendor_slug(req.name.strip())
+        v = store.create_vendor(
+            name=req.name.strip(),
+            slug=slug,
+            api_base=req.api_base.strip(),
+            default_model=(req.default_model or "").strip(),
+            api_key=(req.api_key or "").strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="slug 已存在") from exc
+    log_event("vendor_created", vendor_id=v.id, slug=v.slug)
+    return _vendor_dict(v)
+
+
+@app.patch("/api/vendors/{vendor_id}")
+def patch_vendor_row(vendor_id: str, req: UpdateVendorReq) -> dict[str, Any]:
+    data = req.model_dump(exclude_unset=True)
+    try:
+        v = store.update_vendor(vendor_id, **data)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_event("vendor_updated", vendor_id=vendor_id)
+    return _vendor_dict(v)
+
+
+@app.delete("/api/vendors/{vendor_id}")
+def delete_vendor_row(vendor_id: str) -> dict[str, str]:
+    try:
+        store.delete_vendor(vendor_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    log_event("vendor_deleted", vendor_id=vendor_id)
+    return {"status": "ok"}
 
 
 @app.post("/api/sessions")
 def create_session(req: CreateSessionReq) -> dict[str, Any]:
     workspace_path = _normalize_workspace_path(req.workspace_path)
+    model = req.model
+    api_base = (req.api_base or "").strip().rstrip("/")
+    vendor_id: str | None = None
+    if (req.vendor_id or "").strip():
+        try:
+            v = store.get_vendor(req.vendor_id.strip())
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        vendor_id = v.id
+        api_base = (v.api_base or "").strip().rstrip("/")
+        dm = (v.default_model or "").strip()
+        if dm:
+            model = dm
     record = store.create_session(
         title=req.title,
         workspace_path=workspace_path,
-        model=req.model,
-        api_base=req.api_base,
+        model=model,
+        api_base=api_base,
         auto_run=req.auto_run,
+        vendor_id=vendor_id,
     )
     if req.execution_enabled or (req.confirm_each is not True):
         record = store.update_session(
@@ -231,7 +376,7 @@ def create_session(req: CreateSessionReq) -> dict[str, Any]:
             execution_enabled=req.execution_enabled,
             confirm_each=req.confirm_each,
         )
-    log_event("session_created", session_id=record.id, workspace_path=workspace_path, model=req.model)
+    log_event("session_created", session_id=record.id, workspace_path=workspace_path, model=model)
     return asdict(record)
 
 
@@ -265,6 +410,20 @@ def update_session(session_id: str, req: UpdateSessionReq) -> dict[str, Any]:
         data["title_locked"] = 1
     if "workspace_path" in data and data["workspace_path"] is not None:
         data["workspace_path"] = _normalize_workspace_path(data["workspace_path"])
+    if "vendor_id" in data:
+        vid = data.get("vendor_id")
+        if vid:
+            try:
+                v = store.get_vendor(str(vid).strip())
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            data["vendor_id"] = v.id
+            data["api_base"] = v.api_base
+            dm = (v.default_model or "").strip()
+            if dm and "model" not in data:
+                data["model"] = dm
+        else:
+            data["vendor_id"] = None
     try:
         updated = store.update_session(session_id, **data)
     except KeyError as exc:

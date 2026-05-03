@@ -24,7 +24,7 @@
 |--|--|
 | **What** | Browser UI + **FastAPI** backend: stream chat, **run_shell** / **run_skill**, SQLite persistence, execution audit, layered context & checkpoints. |
 | **Who** | Teams or individuals who already expose a **/v1/chat/completions**-style API and want a **polished local web** control plane—not a disposable demo. |
-| **Docs** | Full install, configuration, features, testing, and contribution guide: **[README_en.md](README_en.md)** · **[README_cn.md](README_cn.md)** |
+| **Docs** | Full install, configuration, features, testing, and contribution guide: **[README_en.md](README_en.md)** · **[README_cn.md](README_cn.md)** · HTTP API for custom UIs: **[docs/API.md](docs/API.md)** |
 
 ---
 
@@ -34,7 +34,7 @@
 |--|--|
 | **是什么** | 浏览器工作台 + **FastAPI**：流式对话、**run_shell / run_skill**、SQLite 持久化、执行审计、分层上下文与 checkpoint。 |
 | **适合谁** | 已有 **OpenAI 兼容推理服务**、希望用 **成熟 Web 界面** 完成日常助手与工具调用的个人或小团队。 |
-| **详细说明** | 安装、环境变量、功能清单、测试与贡献流程请见：**[README_cn.md](README_cn.md)** · **[README_en.md](README_en.md)** |
+| **详细说明** | 安装、环境变量、功能清单、测试与贡献流程请见：**[README_cn.md](README_cn.md)** · **[README_en.md](README_en.md)** · 自建前端 API：**[docs/API.md](docs/API.md)** |
 
 ---
 
@@ -49,7 +49,7 @@
 | **Hardware · 硬件** | Apple MacBook Pro（M4 Max 12性能和4能效），统一内存 **128GB**（更大上下文与本地 STT 更从容） |
 | **OS · 系统** | **macOS** Tahoe 26.4.1 (25E253) |
 | **Python** | **3.12**，项目虚拟环境 **`.venv`**（`./bootstrap.sh`） |
-| **Inference · 推理** |  本机 oMLX + Qwen3.5-35B-A3B-8bit 搭建 **OpenAI 兼容** HTTP API（示例：`OI_API_BASE=http://127.0.0.1:<port>/v1`，`OI_MODEL` 与上游 `/v1/models` 中 id 一致） |
+| **Inference · 推理** | 本机或远端 **OpenAI 兼容** HTTP API；在 Web **Model settings** 写入 Base/Key/模型并存 SQLite；默认 model id 见代码 **`DEFAULT_SESSION_MODEL_ID`**（见 **`.env.example`** 第三节说明） |
 | **Optional · 可选** | **PyMuPDF**（PDF）、**mlx-whisper**（Apple Silicon 本地转写）、**SearXNG / 网关**（`web_search`）、样例 PDF/图/音视频路径用于冒烟 |
 
 ### Screenshots · 技能与界面示意
@@ -74,7 +74,7 @@
 
 ```bash
 git clone https://github.com/staoable/oMLX-CLI.git && cd oMLX-CLI
-./bootstrap.sh && cp .env.example .env.local   # edit OI_API_BASE / OI_MODEL / OI_API_KEY
+./bootstrap.sh && cp .env.example .env.local   # data dir, search, etc.; add Web “Model settings” in UI for chat keys
 ./start_web.sh
 ```
 

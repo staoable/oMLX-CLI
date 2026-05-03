@@ -10,7 +10,6 @@ try:
 except Exception:  # noqa: BLE001
     TestClient = None  # type: ignore[assignment]
 
-
 class ApiIntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -25,6 +24,17 @@ class ApiIntegrationTest(unittest.TestCase):
 
         cls.app_module = importlib.reload(app_module)
         cls.client = TestClient(cls.app_module.app)
+        vr = cls.client.post(
+            "/api/vendors",
+            json={
+                "name": "IntegrationTestUpstream",
+                "api_base": "http://127.0.0.1:59999/v1",
+                "default_model": "",
+                "api_key": "dummy-key-for-tests",
+            },
+        )
+        assert vr.status_code == 200, vr.text
+        cls._integration_vendor_id = vr.json()["id"]
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -43,6 +53,7 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertEqual(created.status_code, 200)
         payload = created.json()
         sid = payload["id"]
+        self.assertIsNone(payload.get("vendor_id"))
 
         got = self.client.get(f"/api/sessions/{sid}")
         self.assertEqual(got.status_code, 200)
@@ -125,7 +136,10 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertIn("message", body)
 
     def test_execution_policy_configurable_via_env(self) -> None:
-        sid = self.client.post("/api/sessions", json={"title": "策略测试"}).json()["id"]
+        sid = self.client.post(
+            "/api/sessions",
+            json={"title": "策略测试", "vendor_id": self.__class__._integration_vendor_id},
+        ).json()["id"]
         old = os.environ.get("OMLXCLI_EXEC_BLOCKLIST_RE")
         os.environ["OMLXCLI_EXEC_BLOCKLIST_RE"] = r"\b(echo)\b"
         try:
@@ -192,6 +206,36 @@ class ApiIntegrationTest(unittest.TestCase):
             os.environ.pop("OMLXCLI_ADMIN_TOKEN", None)
             if old_admin is not None:
                 os.environ["OMLXCLI_ADMIN_TOKEN"] = old_admin
+
+    def test_get_vendor_by_id_includes_api_key(self) -> None:
+        vid = self.__class__._integration_vendor_id
+        r = self.client.get(f"/api/vendors/{vid}")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body.get("api_key"), "dummy-key-for-tests")
+
+    def test_list_vendors_omits_api_key(self) -> None:
+        r = self.client.get("/api/vendors")
+        self.assertEqual(r.status_code, 200)
+        for row in r.json():
+            self.assertNotIn("api_key", row)
+
+    def test_patch_clear_vendor_unbinds(self) -> None:
+        v = self.client.post(
+            "/api/vendors",
+            json={
+                "name": "Tmp",
+                "api_base": "https://upstream.vendor.test/v1",
+                "default_model": "",
+                "api_key": "k",
+            },
+        )
+        self.assertEqual(v.status_code, 200)
+        vid = v.json()["id"]
+        sess = self.client.post("/api/sessions", json={"title": "bind", "vendor_id": vid}).json()
+        self.assertEqual(sess.get("vendor_id"), vid)
+        out = self.client.patch(f"/api/sessions/{sess['id']}", json={"vendor_id": None}).json()
+        self.assertIsNone(out.get("vendor_id"))
 
 
 if __name__ == "__main__":

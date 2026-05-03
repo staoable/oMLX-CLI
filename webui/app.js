@@ -5,15 +5,23 @@ import {
   state,
   el,
 } from "/ui/core/state.js";
-import { api, fetchModelsForBase } from "/ui/core/api.js";
+import { api, fetchModelsForVendor, probeVendor, resolveApiUrl } from "/ui/core/api.js";
 import { escapeHtml, renderMarkdown, renderMetricsFooter, enhanceCodeBlocks } from "/ui/core/markdown.js";
 import { readSseEvents } from "/ui/core/stream.js";
 
 function formatApiError(err) {
   if (!err) return "未知错误";
+  const msg = err.message || String(err);
+  const low = msg.toLowerCase();
+  if (
+    err.name === "TypeError" &&
+    (low.includes("failed to fetch") || low.includes("load failed") || low.includes("networkerror"))
+  ) {
+    return "无法连接后端（网络层失败）。请确认：① 已通过 uvicorn 提供的地址打开界面（例如 http://127.0.0.1:端口/ui/ ，勿用本地 file://）；② 地址栏主机、端口与终端启动服务一致；③ 若挂在反向代理子路径下，需保证 /ui 与 /api 由同一应用转发。";
+  }
   const code = err.errorCode ? ` [${err.errorCode}]` : "";
   const rid = err.requestId ? ` (request_id=${err.requestId})` : "";
-  return `${err.message || String(err)}${code}${rid}`;
+  return `${msg}${code}${rid}`;
 }
 
 function scrollChatToBottom() {
@@ -351,15 +359,265 @@ function fillModelSelect(models, currentModel) {
 }
 
 async function refreshModelDropdown() {
-  const apiBase = el("apiBaseInput").value.trim();
+  const vendorId = (el("vendorSelect")?.value || "").trim();
+  const current = el("modelSelect").value || DEFAULT_MODEL;
+  if (!vendorId) {
+    fillModelSelect([], current);
+    return;
+  }
   try {
-    const data = await fetchModelsForBase(apiBase);
-    const current = el("modelSelect").value || DEFAULT_MODEL;
+    const data = await fetchModelsForVendor(vendorId);
     fillModelSelect(data.models || [], current);
   } catch (e) {
     console.warn(e);
     fillModelSelect([], el("modelSelect").value || DEFAULT_MODEL);
     appendAssistantMessage(`模型列表刷新失败: ${formatApiError(e)}`, { error: true });
+  }
+}
+
+async function fillSessionVendorSelect(selectedId) {
+  const sel = el("vendorSelect");
+  if (!sel) return;
+  let list = [];
+  try {
+    list = await api("/api/vendors");
+  } catch {
+    list = [];
+  }
+  const keep = (selectedId || "").trim();
+  sel.innerHTML = "";
+  if (!list.length) {
+    const ph = document.createElement("option");
+    ph.value = "";
+    ph.textContent = "（请先在侧栏「模型设置」添加并保存）";
+    sel.appendChild(ph);
+    sel.value = "";
+    return;
+  }
+  for (const v of list) {
+    const opt = document.createElement("option");
+    opt.value = v.id;
+    opt.textContent = v.name || v.slug;
+    sel.appendChild(opt);
+  }
+  sel.value = keep && [...sel.options].some((o) => o.value === keep) ? keep : list[0].id;
+}
+
+function setVendorFormHint(text) {
+  const n = el("vendorFormHint");
+  if (n) n.textContent = text || "";
+}
+
+/** 密码型输入在部分浏览器中需先失焦再读，才能拿到刚粘贴/输入的值。 */
+async function readVendorApiKeyTrimmed() {
+  const keyEl = el("vendorFormApiKey");
+  if (!keyEl) return "";
+  if (document.activeElement === keyEl) {
+    keyEl.blur();
+  }
+  await new Promise((r) => setTimeout(r, 0));
+  return (keyEl.value || "").trim();
+}
+
+function clearVendorForm() {
+  el("vendorFormId").value = "";
+  el("vendorFormName").value = "";
+  el("vendorFormApiBase").value = "";
+  el("vendorFormApiKey").value = "";
+  el("vendorFormDefaultModel").innerHTML = "";
+  const o = document.createElement("option");
+  o.value = "";
+  o.textContent = "（请先测试连接）";
+  el("vendorFormDefaultModel").appendChild(o);
+  setVendorFormHint("");
+}
+
+async function renderVendorList() {
+  const mount = el("vendorListMount");
+  if (!mount) return;
+  let list = [];
+  let fetchFailed = false;
+  try {
+    list = await api("/api/vendors");
+  } catch {
+    fetchFailed = true;
+    list = [];
+  }
+  mount.innerHTML = "";
+  if (!list.length) {
+    mount.innerHTML = fetchFailed
+      ? '<div class="obs-empty">未能加载模型设置列表（请检查服务）。</div>'
+      : '<div class="obs-empty">尚未配置模型设置。请在下方创建第一条（名称、API Base、API Key 与默认模型）。</div>';
+    return;
+  }
+  for (const v of list) {
+    const row = document.createElement("div");
+    row.className = "vendor-row";
+    const left = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = v.name || "";
+    const meta = document.createElement("div");
+    meta.className = "vendor-row__meta";
+    meta.textContent = v.api_base || "";
+    left.appendChild(title);
+    left.appendChild(meta);
+    const actions = document.createElement("div");
+    const bEdit = document.createElement("button");
+    bEdit.type = "button";
+    bEdit.className = "btn btn--ghost";
+    bEdit.textContent = "编辑";
+    bEdit.setAttribute("data-vendor-edit", v.id);
+    actions.appendChild(bEdit);
+    const bDel = document.createElement("button");
+    bDel.type = "button";
+    bDel.className = "btn btn--ghost";
+    bDel.textContent = "删除";
+    bDel.setAttribute("data-vendor-del", v.id);
+    actions.appendChild(bDel);
+    row.appendChild(left);
+    row.appendChild(actions);
+    mount.appendChild(row);
+  }
+  mount.querySelectorAll("[data-vendor-edit]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-vendor-edit");
+      await loadVendorIntoForm(id);
+    });
+  });
+  mount.querySelectorAll("[data-vendor-del]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-vendor-del");
+      if (!confirm("确定删除该模型设置？已绑定会话将无法删除。")) return;
+      try {
+        await api(`/api/vendors/${id}`, { method: "DELETE" });
+        setVendorFormHint("已删除。");
+        await renderVendorList();
+        await fillSessionVendorSelect(state.currentVendorId);
+      } catch (e) {
+        setVendorFormHint(`删除失败：${formatApiError(e)}`);
+      }
+    });
+  });
+}
+
+async function loadVendorIntoForm(vendorId) {
+  const v = await api(`/api/vendors/${vendorId}`);
+  el("vendorFormId").value = v.id;
+  el("vendorFormName").value = v.name || "";
+  el("vendorFormApiBase").value = v.api_base || "";
+  el("vendorFormApiKey").value = v.api_key != null ? String(v.api_key) : "";
+  const sel = el("vendorFormDefaultModel");
+  sel.innerHTML = "";
+  const dm = (v.default_model || "").trim();
+  if (dm) {
+    const opt = document.createElement("option");
+    opt.value = dm;
+    opt.textContent = dm;
+    sel.appendChild(opt);
+    sel.value = dm;
+  } else {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = "（请先测试连接）";
+    sel.appendChild(o);
+  }
+  setVendorFormHint("");
+}
+
+function closeVendorsModal() {
+  el("vendorsModal").hidden = true;
+}
+
+async function openVendorsModal() {
+  el("vendorsModal").hidden = false;
+  clearVendorForm();
+  await renderVendorList();
+}
+
+async function onVendorProbeClick() {
+  const base = el("vendorFormApiBase").value.trim();
+  let key = await readVendorApiKeyTrimmed();
+  const vid = el("vendorFormId").value.trim();
+  if (!key && vid) {
+    try {
+      const saved = await api(`/api/vendors/${vid}`);
+      key = saved.api_key != null ? String(saved.api_key).trim() : "";
+      if (key) el("vendorFormApiKey").value = key;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!base) {
+    setVendorFormHint("请填写 API Base。");
+    return;
+  }
+  if (!key) {
+    setVendorFormHint("请填写 API Key；编辑已保存条目并点「编辑」可加载库里已存密钥。");
+    return;
+  }
+  setVendorFormHint("正在测试…");
+  try {
+    const res = await probeVendor(base, key);
+    const models = res.models || [];
+    const sel = el("vendorFormDefaultModel");
+    sel.innerHTML = "";
+    for (const id of models) {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = id;
+      sel.appendChild(opt);
+    }
+    if (models.length) sel.value = models[0];
+    setVendorFormHint(`成功，共 ${models.length} 个模型。默认已选第一项，可修改后保存模型设置。`);
+  } catch (e) {
+    setVendorFormHint(`测试失败：${formatApiError(e)}`);
+  }
+}
+
+async function onVendorSaveRecordClick() {
+  const id = el("vendorFormId").value.trim();
+  const name = el("vendorFormName").value.trim();
+  const apiBase = el("vendorFormApiBase").value.trim();
+  const defaultModel = el("vendorFormDefaultModel").value.trim();
+  const apiKey = await readVendorApiKeyTrimmed();
+  if (!name || !apiBase) {
+    setVendorFormHint("请填写显示名与 API Base。");
+    return;
+  }
+  setVendorFormHint("正在保存…");
+  let hintAfter = "";
+  try {
+    if (id) {
+      const patchBody = { name, api_base: apiBase, default_model: defaultModel };
+      if (apiKey) patchBody.api_key = apiKey;
+      await api(`/api/vendors/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(patchBody),
+      });
+      hintAfter = apiKey
+        ? "已更新该条模型设置（含 API Key，已写入数据库）。表单已清空——继续添加请直接填写后保存；修改其它条请先在列表点「编辑」。"
+        : "已更新该条模型设置（未传 Key 则数据库中原密钥不变）。表单已清空；修改其它模型设置请先在列表点「编辑」。";
+    } else {
+      const created = await api("/api/vendors", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          api_base: apiBase,
+          default_model: defaultModel,
+          api_key: apiKey || null,
+        }),
+      });
+      const label = ((created.name || name) || "").trim() || name;
+      hintAfter = apiKey
+        ? `已创建「${label}」（含 API Key）。表单已清空，可继续添加其它模型设置。`
+        : `已创建「${label}」。补写 API Key 或修改该条请在列表点「编辑」；添加另一条请直接填写下方表单并保存。`;
+    }
+    await renderVendorList();
+    await fillSessionVendorSelect(state.currentVendorId);
+    clearVendorForm();
+    setVendorFormHint(hintAfter);
+  } catch (e) {
+    setVendorFormHint(`保存失败：${formatApiError(e)}`);
   }
 }
 
@@ -371,7 +629,7 @@ function renderEmptyHint() {
   div.innerHTML =
     "<strong>开始对话</strong>" +
     "在页面<strong>最下方输入框</strong>输入内容，Enter 发送，Shift+Enter 换行。" +
-    '<span class="thread-empty__sub">需要改模型、API 或工作目录时点顶部「设置」；排查执行与上下文时点「调试」。</span>';
+    '<span class="thread-empty__sub">需要改模型、模型设置或工作目录时点顶部「设置」；排查执行与上下文时点「调试」。</span>';
   thread.appendChild(div);
 }
 
@@ -478,14 +736,18 @@ async function selectSession(sessionId) {
       }
     });
   }
-  el("apiBaseInput").value = data.api_base;
+  state.sessionApiBaseFromServer = data.api_base || "";
+  state.effectiveApiBase = data.api_base || "";
   el("workspacePathInput").value = data.workspace_path || "";
   el("executionEnabledInput").checked = Boolean(data.execution_enabled);
   el("confirmEachInput").checked = data.confirm_each !== false;
   const arch = el("sessionArchivedInput");
   if (arch) arch.checked = Boolean(data.archived);
+  await fillSessionVendorSelect((data.vendor_id || "").trim());
+  state.currentVendorId = (el("vendorSelect")?.value || "").trim() || null;
   try {
-    const remote = await fetchModelsForBase(data.api_base);
+    const vid = (state.currentVendorId || "").trim();
+    const remote = vid ? await fetchModelsForVendor(vid) : { models: [] };
     fillModelSelect(remote.models || [], data.model);
   } catch {
     fillModelSelect([], data.model);
@@ -519,11 +781,12 @@ async function deleteSession(sessionId, ev) {
 
 async function saveSessionConfig() {
   if (!state.currentSessionId) return;
+  const rawVid = (el("vendorSelect")?.value || "").trim();
   const updated = await api(`/api/sessions/${state.currentSessionId}`, {
     method: "PATCH",
     body: JSON.stringify({
       model: el("modelSelect").value,
-      api_base: el("apiBaseInput").value.trim(),
+      vendor_id: rawVid || null,
       workspace_path: el("workspacePathInput").value.trim(),
       execution_enabled: el("executionEnabledInput").checked,
       confirm_each: el("confirmEachInput").checked,
@@ -629,7 +892,7 @@ async function sendMessage() {
         const data_url = await fileToDataUrl(a.file);
         encoded.push({ name: a.name, mime: a.mime, size: a.size, data_url });
       }
-      res = await fetch(`/api/sessions/${state.currentSessionId}/messages`, {
+      res = await fetch(resolveApiUrl(`/api/sessions/${state.currentSessionId}/messages`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content, attachments: encoded }),
@@ -729,7 +992,6 @@ el("refreshObsBtn").onclick = refreshObservability;
 el("obsExecStatusFilter").addEventListener("change", renderObservabilityPanel);
 el("sidebarToggle").onclick = toggleSidebar;
 el("editTitleBtn").onclick = startEditTitle;
-el("apiBaseInput").addEventListener("change", () => refreshModelDropdown());
 el("executionEnabledInput").addEventListener("change", () => {
   saveExecutionTogglesInline();
 });
@@ -754,12 +1016,48 @@ el("settingsModal").addEventListener("click", (e) => {
   const node = e.target.closest("[data-close-modal]");
   if (node && node.getAttribute("data-close-modal") === "settings") closeSettingsModal();
 });
+el("vendorsModal").addEventListener("click", (e) => {
+  const node = e.target.closest("[data-close-modal]");
+  if (node && node.getAttribute("data-close-modal") === "vendors") closeVendorsModal();
+});
+el("openVendorsModalBtn").addEventListener("click", () => {
+  openVendorsModal();
+});
+el("vendorProbeBtn").addEventListener("click", () => onVendorProbeClick());
+el("vendorSaveRecordBtn").addEventListener("click", () => onVendorSaveRecordClick());
+el("vendorNewBtn").addEventListener("click", () => clearVendorForm());
 el("debugModal").addEventListener("click", (e) => {
   const node = e.target.closest("[data-close-modal]");
   if (node && node.getAttribute("data-close-modal") === "debug") closeDebugModal();
 });
-el("openSettingsModalBtn").addEventListener("click", () => {
+el("openSettingsModalBtn").addEventListener("click", async () => {
+  await fillSessionVendorSelect(state.currentVendorId);
+  try {
+    const id = (el("vendorSelect")?.value || "").trim();
+    const v = id ? await api(`/api/vendors/${id}`) : null;
+    state.effectiveApiBase = (v && v.api_base) || state.sessionApiBaseFromServer || "";
+  } catch {
+    state.effectiveApiBase = state.sessionApiBaseFromServer || "";
+  }
   el("settingsModal").hidden = false;
+});
+el("vendorSelect")?.addEventListener("change", async () => {
+  const id = (el("vendorSelect").value || "").trim();
+  if (!id) {
+    state.effectiveApiBase = state.sessionApiBaseFromServer || "";
+    await refreshModelDropdown();
+    return;
+  }
+  try {
+    const v = await api(`/api/vendors/${id}`);
+    state.effectiveApiBase = v.api_base || "";
+    if ((v.default_model || "").trim()) {
+      fillModelSelect([], v.default_model.trim());
+    }
+    await refreshModelDropdown();
+  } catch (e) {
+    appendAssistantMessage(`加载模型设置失败: ${formatApiError(e)}`, { error: true });
+  }
 });
 el("openDebugModalBtn").addEventListener("click", async () => {
   el("debugModal").hidden = false;
@@ -780,6 +1078,11 @@ document.addEventListener("keydown", (e) => {
   if (!el("settingsModal").hidden) {
     e.preventDefault();
     closeSettingsModal();
+    return;
+  }
+  if (!el("vendorsModal").hidden) {
+    e.preventDefault();
+    closeVendorsModal();
   }
 });
 

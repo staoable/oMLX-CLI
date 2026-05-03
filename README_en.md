@@ -70,7 +70,7 @@ cd oMLX-CLI
 
 ./bootstrap.sh
 cp .env.example .env.local
-# Edit .env.local: OI_API_BASE, OI_MODEL, OI_API_KEY (and optional search gateway for web_search)
+# Edit .env.local: data dir, search gateway, etc. Web upstream is only in SQLite via UI “Model settings” (see Configuration)
 
 ./start_web.sh
 ```
@@ -85,8 +85,9 @@ Use **`.venv/bin/python`** for scripts so dependencies (PyMuPDF, conditional mlx
 ## Configuration
 
 - **Template**: **`.env.example`** — copy to **`.env.local`** (gitignored).
-- **Load order**: `webapi/dotenv_loader.py` loads `.env` then `.env.local`; values already present in the environment are not overwritten. `start_web.sh` also `source`s these files.
-- **Common keys**: `OI_API_BASE`, `OI_MODEL`, `OI_API_KEY`, `OMLXCLI_DATA_DIR`, `OMLXCLI_DEFAULT_WORKSPACE`, `OMLXCLI_RUN_SKILL_TIMEOUT_SEC`, `OMLXCLI_SEARCH_*` / `OMLXCLI_SEARXNG_URL` for search skills—see comments inside `.env.example`.
+- **Load order**: `webapi/dotenv_loader.py` loads `.env` then **`.env.local`**; values already present in the environment are not overwritten. `start_web.sh` also `source`s these files.
+- **Model settings (Web)**: Add at least one row; **`api_base` / `api_key` / default model** live in **`sessions.db`** (`vendors`); bind a row per session in Settings before chat or LLM-using Skills. **Do not** use `OI_API_BASE` / `OI_API_KEY` in `.env.local` for the web UI (removed from **`.env.example`**; delete stale keys locally if present).
+- **Typical `.env.local` keys**: `OMLXCLI_DATA_DIR`, `OMLXCLI_DEFAULT_WORKSPACE`, `OMLXCLI_RUN_SKILL_TIMEOUT_SEC`, `OMLXCLI_CHAT_*`, `OMLXCLI_SEARCH_*` / `OMLXCLI_SEARXNG_URL`, etc. Default model id for new sessions and legacy placeholder resolution use **`DEFAULT_SESSION_MODEL_ID`** in code plus the bound vendor’s **`default_model`**—no **`OI_MODEL`** env. See **`.env.example`**.
 
 ---
 
@@ -95,11 +96,11 @@ Use **`.venv/bin/python`** for scripts so dependencies (PyMuPDF, conditional mlx
 **Sessions**
 
 - Create, switch, delete sessions; auto-generated titles, manual edit, title lock.
-- Per-session model, API base, API key, workspace path, and execution policy.
+- Per-session model and **bound model settings** (`vendors` row), workspace path, and execution policy.
 
 **Model & streaming**
 
-- Pull model list from upstream; stream deltas over SSE; store assistant messages and coarse performance fields.
+- After configuring **`vendors`** in the Web UI, the session’s bound **`vendor_id`** drives **`GET /api/models?vendor_id=…`**; stream deltas over SSE; store assistant messages and coarse performance fields.
 
 **Execution**
 
@@ -167,15 +168,17 @@ The repository home **`README.md`** includes the **maintainer reference environm
 |------|-------------|
 | `Skills_README.md` | Skills catalog, manifest, OI_TOOL_MAP workflow, smoke variables. |
 | `.env.example` | All environment variables with comments. |
-| `IMPLEMENTATION_PLAN.md` | Delivery plan and priorities. |
-| `OI_CAPABILITY_MATRIX.md` | Capability matrix vs roadmap. |
+| `IMPLEMENTATION_PLAN.md` | Status, code pointers, optional evolution; keep in sync with matrix/API docs. |
+| `OI_CAPABILITY_MATRIX.md` | Capability list (implemented / partial / missing). |
+| `docs/API.md` | **HTTP API** (custom frontends, SSE, errors); complements **`/docs`** OpenAPI. |
+| `docs/UPSTREAM_VENDOR_IMPLEMENTATION.md` | Model settings: credentials, binding, DB ops (REST details in **`docs/API.md`**). |
 | `CHANGELOG.md` | Release notes (tracks `webapi` FastAPI `version`). |
 
 ---
 
 ## Roadmap
 
-Long-session **semantic retrieval**, stronger **product UX**, and continued hardening are tracked in **`IMPLEMENTATION_PLAN.md`** and **`OI_CAPABILITY_MATRIX.md`**.
+Roadmap and gaps: **`OI_CAPABILITY_MATRIX.md`** and **`IMPLEMENTATION_PLAN.md`** §5.
 
 ---
 

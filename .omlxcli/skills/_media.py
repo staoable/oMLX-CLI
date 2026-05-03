@@ -249,31 +249,19 @@ def video_split(
 
 
 def _llm_endpoint() -> tuple[str, str, str]:
-    """读取当前 oMLX 端点配置 (api_base, api_key, model)。
+    """读取当前推理端点 (api_base, api_key, model)。
 
-    重要：本函数会在 OI 的 IPython **子内核**里执行（skill 是被模型当 Python
-    函数调用的），子进程里 `from interpreter import interpreter` 拿到的是
-    **新建的、未配置的** interpreter 实例（默认 model=gpt-4o）——不能依赖它。
-
-    所以走 env vars 优先。`open_interpreter_cli.py` 的 main() 在确定
-    api_base/api_key/model 后会把它们写到 `_AICLI_LLM_*` 这组 env，
-    jupyter kernel 子进程会继承到。
+    Web 会话执行 `run_skill` 时，由 `webapi.session_engine` 在调用前注入
+    `_AICLI_API_BASE` / `_AICLI_API_KEY` / `_AICLI_LLM_MODEL`，与当前会话所选
+    模型设置一致。未注入时视为配置缺失。
     """
-    api_base = (
-        os.getenv("_AICLI_API_BASE")
-        or os.getenv("OI_API_BASE")
-        or "http://127.0.0.1:8000/v1"
-    ).rstrip("/")
-    api_key = (
-        os.getenv("_AICLI_API_KEY")
-        or os.getenv("OI_API_KEY")
-        or "EMPTY"
-    )
-    model = (
-        os.getenv("_AICLI_LLM_MODEL")
-        or os.getenv("OI_MODEL")
-        or "default_model"
-    )
+    api_base = (os.getenv("_AICLI_API_BASE") or "").strip().rstrip("/")
+    api_key = (os.getenv("_AICLI_API_KEY") or "").strip() or "EMPTY"
+    model = (os.getenv("_AICLI_LLM_MODEL") or "").strip() or "default_model"
+    if not api_base:
+        raise RuntimeError(
+            "缺少推理端点：请在 Web 中为会话选择模型设置并保存后再调用依赖模型的技能。"
+        )
     # OI 的 LiteLLM 习惯前缀是 openai/，去掉
     if model.startswith("openai/"):
         model = model[len("openai/"):]
