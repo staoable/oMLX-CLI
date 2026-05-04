@@ -12,25 +12,28 @@
   <img src="https://img.shields.io/badge/version-0.2.1-555555" alt="version 0.2.1" />
 </p>
 
-A **production-ready, self-hostable web workspace** for **OpenAI-compatible** local or remote LLMs: multi-session chat, agent-style **shell / skill execution**, multimodal attachments, and an extensible **skills** layer (PDF, weather, web, vision, audio on supported platforms).
+A **deliverable, self-hostable web workspace** for **OpenAI-compatible** local or remote LLMs: multi-session chat, agent-style **shell / skill execution**, multimodal attachments, and an extensible **skills** layer (PDF, weather, web, vision, audio on supported platforms).
 
-This is a **deliverable web application** (session engine, SQLite persistence, execution policy, structured logging, **CI**: unit tests + Playwright E2E + HTTP smoke)—not a throwaway MVP.
+This is a **day-to-day web application** (session engine, SQLite persistence, execution policy, structured logging, **CI**: unit tests + Playwright E2E + HTTP smoke)—meant to be more than a throwaway MVP; **whether it meets your production bar** still depends on how you deploy it, on upstreams, and on compliance. The narrative matches the repository home **`README.md`** (including the bilingual sections on problems solved, fit scenarios, and Claude Code).
 
 ---
 
 ## Table of contents
 
 1. [Positioning](#positioning)
-2. [Highlights](#highlights)
-3. [Quick start](#quick-start)
-4. [Configuration](#configuration)
-5. [Features](#features)
-6. [Repository layout](#repository-layout)
-7. [Testing & quality](#testing--quality)
-8. [Related documentation](#related-documentation)
-9. [Roadmap](#roadmap)
-10. [Contributing](#contributing)
-11. [License](#license)
+2. [Problems we help solve](#problems-we-help-solve)
+3. [When it shines](#when-it-shines)
+4. [Relationship to Claude Code](#relationship-to-claude-code)
+5. [Highlights](#highlights)
+6. [Quick start](#quick-start)
+7. [Configuration](#configuration)
+8. [Features](#features)
+9. [Repository layout](#repository-layout)
+10. [Testing & quality](#testing--quality)
+11. [Related documentation](#related-documentation)
+12. [Roadmap](#roadmap)
+13. [Contributing](#contributing)
+14. [License](#license)
 
 ---
 
@@ -38,6 +41,39 @@ This is a **deliverable web application** (session engine, SQLite persistence, e
 
 - **Goal**: a reliable **browser-based** command center around **your** OpenAI-compatible API (e.g. oMLX, vLLM, LM Studio HTTP gateway)—**not** a pixel-perfect clone of any particular desktop CLI.
 - **Skills** live under `.omlxcli/skills` (manifest-driven). See **`Skills_README.md`** for layout, `gen_oi_tool_map`, and smoke tests.
+
+---
+
+## Problems we help solve
+
+- **Fragmented tools** — You already have an OpenAI-compatible endpoint, but juggling ad-hoc scripts, loose API keys in env files, and a separate browser chat is brittle. Here, **model settings live in SQLite**, sessions bind a **vendor**, and the same UI drives **chat + shell + skills** with **execution audit** and **`x-request-id`** tracing.
+- **Repeatable “agent” work** — Turn long threads into something you can **resume**: layered context, checkpoints, and a bounded **`run_shell` / `run_skill`** loop instead of one-off copy-paste into a terminal.
+- **Local / team guardrails** — **`OMLXCLI_CORS_ORIGINS`**, **rate limits**, **payload / attachment caps**, workspace path checks, and optional **multimodal cache TTL** are first-class knobs for self-hosting—not afterthoughts.
+
+---
+
+## When it shines
+
+Best fit when you want:
+
+- A **browser-first** assistant over **your own** (or team) **OpenAI-compatible** API — including local gateways (LM Studio, vLLM, custom stacks, etc.).
+- **Multimodal chat** in the UI plus **skills** (PDF, repo grep, spreadsheets, web read/search where configured, optional **Apple Silicon** STT) in the same session model.
+- **Optional** offload of **long-running Claude Code jobs** (`claude_job_*`) while keeping day-to-day chat on whatever vendor you configured — see **`docs/CLAUDE_CODE_JOB_SPEC.md`**.
+
+---
+
+## Relationship to Claude Code
+
+**Claude Code** excels as an **interactive terminal coding agent** for developers who live in the shell. **oMLX CLI is not a replacement** for that workflow; it is a **different layer**:
+
+| Dimension | Claude Code (typical) | oMLX CLI |
+|-----------|------------------------|----------|
+| **Primary chat model** | Anthropic / Claude Code product assumptions | **Any OpenAI-compatible** HTTP API you configure per **vendor** in the Web UI |
+| **Surface** | Terminal-centric | **Web UI + REST** (`docs/API.md`), shareable in a LAN / small-team sense |
+| **Persistence & ops** | Session/product dependent | **SQLite** sessions, vendors, execution records; structured logs, **CORS / limits** you control |
+| **Tooling breadth** | Strong for repo editing & codegen | **Manifest skills** (PDF, weather, notes, `repo_grep`, read-only git snapshots, xlsx/csv, docx, …) **plus** optional **`claude_job_*`** that **delegates** to the official **`claude`** CLI for a **subset** of long jobs |
+
+**Honest takeaway** · If your only need is **daily IDE-style coding inside a terminal**, Claude Code alone may be simpler. Choose oMLX when you want a **self-hosted web control plane**, **mixed-model / mixed-vendor** chat, **integrated skills + audits**, and **optional** background **Claude Code** jobs—not when you need a 1:1 clone of the Claude Code UX.
 
 ---
 
@@ -96,6 +132,7 @@ Use **`.venv/bin/python`** for scripts so dependencies (PyMuPDF, conditional mlx
 - **Vendor (Model settings, Web)**: Add at least one row; **`api_base` / `api_key` / default model** live in **`sessions.db`** (`vendors`); bind a row per session in Settings before chat or LLM-using Skills. **Do not** use `OI_API_BASE` / `OI_API_KEY` in `.env.local` for the web UI (removed from **`.env.example`**; delete stale keys locally if present).
 - **Typical `.env.local` keys**: `OMLXCLI_DATA_DIR`, `OMLXCLI_DEFAULT_WORKSPACE`, `OMLXCLI_RUN_SKILL_TIMEOUT_SEC`, `OMLXCLI_CHAT_*`, `OMLXCLI_SEARCH_*` / `OMLXCLI_SEARXNG_URL`, etc. Default model id for new sessions and legacy placeholder resolution use **`DEFAULT_SESSION_MODEL_ID`** in code plus the bound vendor’s **`default_model`**—no **`OI_MODEL`** env. See **`.env.example`**.
 - **Do not miss these production guards**:
+  - CORS: `OMLXCLI_CORS_ORIGINS` (defaults to local `8788`; list every browser origin if you access the UI cross-origin)
   - rate limit: `OMLXCLI_MSG_RATE_LIMIT_COUNT`, `OMLXCLI_MSG_RATE_LIMIT_WINDOW_SEC`
   - payload limits: `OMLXCLI_MSG_MAX_BODY_BYTES`, `OMLXCLI_MSG_MAX_ATTACHMENTS_BYTES`
   - media cache cleanup: `OMLXCLI_MEDIA_CACHE_TTL_SEC`, `OMLXCLI_MEDIA_CACHE_CLEANUP_INTERVAL_SEC`
@@ -174,7 +211,7 @@ CI (`.github/workflows/ci.yml`): `pip install -r requirements.txt`, Playwright C
 
 ## Related documentation
 
-The repository home **`README.md`** includes the **maintainer reference environment** and **UI / skills smoke illustrations** (`docs/readme/`) to help visitors trust local runs.
+The repository home **`README.md`** includes the **maintainer reference environment**, the bilingual sections on **problems solved / fit scenarios / Claude Code comparison**, and **UI / skills smoke illustrations** (`docs/readme/`) to help visitors trust local runs.
 
 | File | Description |
 |------|-------------|
