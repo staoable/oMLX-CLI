@@ -12,6 +12,7 @@
 ### 文档
 
 - **`Skills_README.md`** §8.1、**`.env.example`「九·1」**、**`scripts/smoke_all_skills.py`** 头注释、**`README_cn.md` / `README_en.md`** 命令表：全技能冒烟变量与 **`OMLXCLI_EVAL_SKIP_HTTP`** / **`web_read`** 关系；**vision_*** / **audio_transcribe** / **video_summarize** 在无 **`_AICLI_API_BASE`** 时 **SKIP**（非 FAIL）；**`OI_CAPABILITY_MATRIX.md`**、**`IMPLEMENTATION_PLAN.md`** 与 skills 条目已对齐。
+- **`docs/CLAUDE_CODE_JOB_SPEC.md`**：Claude Code Job（官方 CLI、macOS 优先）草案——**仅 `run_skill` 发起**、**UI 只读监控**、日志 **HTTP 轮询 + tail**。
 
 ## [0.2.0] — 2026-05-02
 
