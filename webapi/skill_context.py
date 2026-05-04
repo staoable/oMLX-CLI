@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 oMLX CLI contributors
 """run_skill 调用链上的会话上下文（供需要 session / 工作区的技能读取）。"""
 
 from __future__ import annotations

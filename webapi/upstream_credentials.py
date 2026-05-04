@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 oMLX CLI contributors
 """根据会话绑定在 SQLite 中的模型设置（vendors）解析 api_base 与 api_key。"""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 oMLX CLI contributors
 """从仓库根目录加载 `.env`、`.env.local` 到 `os.environ`。
 
 约定：

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 oMLX CLI contributors
 """Claude Code CLI 长任务：子进程 + SQLite 元数据 + 日志文件 tail。"""
 
 from __future__ import annotations

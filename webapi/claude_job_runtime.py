@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 oMLX CLI contributors
 """由 app 启动时注入，供 skills 模块解析 Claude Job 服务（避免 skills 直接 import app）。"""
 
 from __future__ import annotations

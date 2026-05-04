@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 oMLX CLI contributors
 from __future__ import annotations
 
 import json
@@ -907,9 +909,14 @@ class OiSessionEngine:
     @staticmethod
     def _run_shell_command(cmd: str, cwd: str, timeout_sec: int = 90) -> dict[str, Any]:
         t0 = time.perf_counter()
+        if os.name == "nt":
+            argv = [os.environ.get("ComSpec", "cmd.exe"), "/c", cmd]
+        else:
+            shell = os.environ.get("SHELL") or "/bin/sh"
+            argv = [shell, "-c", cmd]
         try:
             proc = subprocess.run(
-                ["/bin/zsh", "-lc", cmd],
+                argv,
                 cwd=cwd,
                 capture_output=True,
                 text=True,

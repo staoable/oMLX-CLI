@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 oMLX CLI contributors
 from __future__ import annotations
 
 import json
@@ -123,11 +125,28 @@ def _vendor_dict(v: Any, *, include_api_key: bool = False) -> dict[str, Any]:
         d.pop("api_key", None)
     return d
 
+
+def _cors_allow_origins() -> tuple[list[str], bool]:
+    """返回 (origins, allow_credentials)。显式列出来源；与浏览器携带 Cookie 时兼容。"""
+    default = ("http://127.0.0.1:8788", "http://localhost:8788")
+    raw = (os.getenv("OMLXCLI_CORS_ORIGINS") or "").strip()
+    if not raw:
+        return (list(default), True)
+    items = [x.strip() for x in raw.split(",") if x.strip()]
+    if not items:
+        return (list(default), True)
+    if any(x == "*" for x in items):
+        return (["*"], False)
+    return (items, True)
+
+
+_cors_origins, _cors_credentials = _cors_allow_origins()
+
 app = FastAPI(title=APP_NAME, version="0.2.1")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
