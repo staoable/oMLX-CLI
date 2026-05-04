@@ -162,6 +162,34 @@
       "min_positional_args": 1,
       "max_total_args": 6,
       "changelog": "docx 抽文本"
+    },
+    "claude_job_start": {
+      "version": "1.0.0",
+      "permissions": ["network", "subprocess", "filesystem_write"],
+      "min_positional_args": 1,
+      "max_total_args": 10,
+      "changelog": "Claude Code CLI 长任务启动（支持 continue/isolated 上下文）"
+    },
+    "claude_job_status": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 4,
+      "changelog": "Claude Job 状态"
+    },
+    "claude_job_logs": {
+      "version": "1.0.0",
+      "permissions": ["filesystem_read"],
+      "min_positional_args": 1,
+      "max_total_args": 6,
+      "changelog": "Claude Job 日志 tail"
+    },
+    "claude_job_cancel": {
+      "version": "1.0.0",
+      "permissions": ["subprocess"],
+      "min_positional_args": 1,
+      "max_total_args": 4,
+      "changelog": "Claude Job 取消"
     }
   }
 }

@@ -6,6 +6,8 @@ from typing import Any
 
 import ast
 
+from webapi.logging_utils import log_event
+
 
 def load_skill_manifests(skills_dir: str) -> dict[str, Any]:
     """读取 `.omlxcli/skills/manifests/skills.json` 中的技能元数据。"""
@@ -14,7 +16,14 @@ def load_skill_manifests(skills_dir: str) -> dict[str, Any]:
         return {}
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log_event(
+            "skill_manifest_load_error",
+            skills_dir=skills_dir,
+            file=str(p),
+            error_type=type(exc).__name__,
+            message=str(exc)[:300],
+        )
         return {}
     skills = data.get("skills")
     return skills if isinstance(skills, dict) else {}

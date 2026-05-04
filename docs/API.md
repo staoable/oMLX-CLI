@@ -125,7 +125,24 @@
 - `api_key` 不能为空（会 **400**）。
 - 成功：`{"ok": true, "api_base": "<规范化后的 base>", "models": ["id1", "..."]}`（与上游 `GET {base}/models` 解析一致）。
 
-### 4.7 代理上游模型列表
+### 4.7 默认供应商
+
+**GET** `/api/vendors/default`
+
+- 返回当前默认供应商：`{"vendor_id":"<vendors.id>"}`；未设置时为 `{"vendor_id": null}`。
+
+**PUT** `/api/vendors/default`
+
+请求体示例：
+
+```json
+{ "vendor_id": "vendors.id 或 null" }
+```
+
+- 传具体 id：设置为默认供应商（不存在返回 404）。
+- 传 `null`：清空默认供应商。
+
+### 4.8 代理上游模型列表
 
 **GET** `/api/models?vendor_id=<vendors.id>`
 
@@ -153,6 +170,11 @@
 | `auto_run` | 默认 `true` |
 | `execution_enabled` | 是否走「代理执行」多轮 shell/skill 流程，默认 `false` |
 | `confirm_each` | 高危 shell 前是否要求确认，默认 `true` |
+
+补充行为：
+
+- 若请求**未传** `vendor_id`，服务端会尝试使用“默认供应商”（`GET /api/vendors/default` 可查询）。
+- 一旦绑定到某供应商，若该供应商设置了 `default_model`，会话 `model` 会同步为该值。
 
 响应：完整 **`SessionRecord`** 的 JSON 对象（`asdict`），字段包括：
 
@@ -226,6 +248,9 @@
 
 响应：**`text/event-stream`**（Server-Sent Events），**非** JSON 单响应。
 
+限流：若同一会话 + 客户端 IP 在窗口期内请求过于频繁，将返回 **429**，`error_code=RATE_LIMITED`。
+体积限制：请求体或附件总量超限时返回 **413**，`error_code=PAYLOAD_TOO_LARGE` 或 `ATTACHMENTS_TOO_LARGE`。
+
 ### 6.1 SSE 帧格式
 
 每事件若干行，以**空行**结束：
@@ -259,7 +284,7 @@ data: <JSON 对象>
 
 ### 6.3 客户端最小流程
 
-1. `POST /api/sessions` 创建会话，并（推荐）`PATCH` 绑定 **`vendor_id`**、选好 **`model`**。
+1. `POST /api/sessions` 创建会话，并（推荐）`PATCH` 绑定 **`vendor_id`**、选好 **`model`**（若系统已配置默认供应商，创建时会自动尝试绑定并同步默认模型）。
 2. `POST .../messages`，`body` 为 JSON；用 **`ReadableStream`** 或 `fetch().body.getReader()` 读 SSE。
 3. 收到 **`require_confirm`** 后，由用户决定调用 **`POST .../confirm-command`**（§7）。
 4. 流结束后 **`GET /api/sessions/{id}`** 同步消息列表与 `pending_command` 等。
@@ -296,6 +321,20 @@ data: <JSON 对象>
 **`context_injections`**：`id`, `session_id`, `source`, `role`, `char_count`, `dropped`, `reason`, `created_at`。
 
 **`agent_trace`**：`id`, `session_id`, `turn_id`, `step_index`, `action_type`, `detail`, `created_at`（列表中与 SSE 的 `action` / `detail` 对应）。
+
+### 8.1 Claude Code Job（可选）
+
+须配置 **`.env.example` 第十一节**（`OMLXCLI_ENABLE_CLAUDE_CODE`、**`OMLXCLI_CLAUDE_CODE_API_KEY`** 等）且本机 **`claude`** 在 PATH。服务会向子进程注入 **`ANTHROPIC_AUTH_TOKEN`**（并兼容 `ANTHROPIC_API_KEY`）及 `ANTHROPIC_MODEL`。未启用时 **GET** **`/api/sessions/{session_id}/claude-jobs`** 仍返回 **200**，body 含 **`enabled: false`** 与说明；单条 job / logs / cancel 返回 **501**。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| **GET** | `/api/claude-code/status` | CLI / 密钥 / 功能开关摘要 |
+| **GET** | `/api/sessions/{session_id}/claude-jobs` | `limit` 默认 50；`enabled` + `jobs[]`（含 `prompt_preview`） |
+| **GET** | `/api/sessions/{session_id}/claude-jobs/{job_id}` | 完整 job 行 |
+| **GET** | `/api/sessions/{session_id}/claude-jobs/{job_id}/logs` | 查询参数 **`tail`** 默认 200，最大 5000；`{"text":"..."}` |
+| **POST** | `/api/sessions/{session_id}/claude-jobs/{job_id}/cancel` | 取消任务（`running` 与 `queued` 均支持） |
+
+任务由对话 **`run_skill`** 调用 **`claude_job_*`** 创建。常见状态包含：`queued` / `running` / `completed` / `failed` / `cancelled`。详见 **`docs/CLAUDE_CODE_JOB_SPEC.md`**。
 
 ---
 
@@ -362,4 +401,4 @@ data: <JSON 对象>
 
 ## 12. 版本
 
-本文档编写时应用内 **`FastAPI` `version`** 字段为 **`0.2.0`**（见 `webapi/app.py`）。升级后请以 **`/openapi.json`** 与 **`CHANGELOG.md`** 为准。
+本文档编写时应用内 **`FastAPI` `version`** 字段为 **`0.2.1`**（见 `webapi/app.py`）。升级后请以 **`/openapi.json`** 与 **`CHANGELOG.md`** 为准。

@@ -71,7 +71,7 @@ def render_tools_md(registry: list[dict] | None = None) -> str:
         "## 已加载的本地工具（持久工具链）",
         "",
         "下面这些函数已注入到当前 IPython 内核的 builtins：**直接当函数调用即可，不要 `import`**。",
-        "需要新工具时，写到 `.aicli/skills/<your_module>.py`，重启会话即可生效。",
+        "需要新工具时，写到 `.omlxcli/skills/<your_module>.py`，重启会话即可生效。",
         "",
     ]
     for module in sorted(by_module):

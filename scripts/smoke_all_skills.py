@@ -126,6 +126,10 @@ def main() -> int:
             expr = "files_read_chunk('__ROOT__/README.md', start=0, lines=2)"
         elif name == "files_search":
             expr = "files_search('SessionStore', path='__ROOT__/webapi', kind='content', max_results=1)"
+        elif name.startswith("claude_job_"):
+            skip_reason = (
+                "需 Web 会话与 Claude Job 服务；冒烟不测（见 docs/CLAUDE_CODE_JOB_SPEC.md）"
+            )
         elif name == "repo_grep":
             expr = "repo_grep('def', path='__ROOT__/webapi', max_matches=2)"
         elif name == "csv_tsv_summary":

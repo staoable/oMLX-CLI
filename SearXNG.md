@@ -11,7 +11,7 @@
 - `mihomo`：提供出海代理能力（本机 `127.0.0.1:7890`）
 - `SearXNG`：基础聚合搜索服务（`127.0.0.1:8080`）
 - `search-gateway v2`：检索增强层（查询改写、去重重排、缓存）(`0.0.0.0:8090`，建议仅内网访问)
-- `Nginx(公网机)`：`dog.lqai.cn` 统一入口，`/search` 转发到 v2 网关，其他路径转发到 SearXNG UI
+- `Nginx(公网机)`：`$url` 统一入口，`/search` 转发到 v2 网关，其他路径转发到 SearXNG UI
 
 ---
 
@@ -83,13 +83,13 @@ Search Gateway v2 当前策略：
 ```nginx
 server {
     listen 80;
-    server_name dog.lqai.cn;
+    server_name $url;
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl http2;
-    server_name dog.lqai.cn;
+    server_name $url;
 
     ssl_certificate     /etc/nginx/conf.d/cer/cer/lqai.cn/www.lqai.cn.pem;
     ssl_certificate_key /etc/nginx/conf.d/cer/cer/lqai.cn/www.lqai.cn.key;
@@ -133,7 +133,7 @@ nginx -t && systemctl reload nginx
 
 ```bash
 curl -k -u '用户名:密码' \
-  'https://dog.lqai.cn/search?q=openai&refresh=1'
+  'https://$url/search?q=openai&refresh=1'
 ```
 
 期待返回字段包含：
@@ -150,7 +150,7 @@ curl -k -u '用户名:密码' \
 
 ```bash
 curl -k -u '用户名:密码' \
-  'https://dog.lqai.cn/search?q=openai&refresh=1'
+  'https://$url/search?q=openai&refresh=1'
 ```
 
 当前已验证通过，返回中包含：
@@ -159,7 +159,7 @@ curl -k -u '用户名:密码' \
 - `rewrites`（4 路改写）
 - `results`（已带 `score` 字段）
 
-说明公网 `dog.lqai.cn/search` 已走 v2 网关链路。
+说明公网 `$url/search` 已走 v2 网关链路。
 
 ### 6.5 关于 yandex CAPTCHA
 
@@ -188,7 +188,7 @@ curl -s 'http://127.0.0.1:8090/search?q=openai'
 
 ```bash
 time curl -k -u '用户名:密码' \
-  'https://dog.lqai.cn/search?q=openai'
+  'https://$url/search?q=openai'
 ```
 
 ---
@@ -199,7 +199,7 @@ time curl -k -u '用户名:密码' \
 
 优先对接：
 
-- `https://dog.lqai.cn/search?q=<query>&refresh=1`
+- `https://$url/search?q=<query>&refresh=1`
 
 内网/本机直连：
 
@@ -349,7 +349,7 @@ curl -s 'http://127.0.0.1:8090/search?q=openai&refresh=1' \
 9) 验证公网域名是否走 v2（需鉴权）
 
 ```bash
-curl -k -u '用户名:密码' 'https://dog.lqai.cn/search?q=openai&refresh=1' \
+curl -k -u '用户名:密码' 'https://$url/search?q=openai&refresh=1' \
 | python3 -c "import sys,json;d=json.load(sys.stdin);print('has_profile=', 'ranking_profile' in d);print('results=',len(d.get('results',[])))"
 ```
 

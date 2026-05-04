@@ -55,6 +55,7 @@ def files_search(
                         "-uu",
                         "--max-count",
                         "1",
+                        "--",
                         query,
                         abs_path,
                     ],
@@ -83,7 +84,7 @@ def files_search(
         if fd:
             try:
                 proc = subprocess.run(
-                    [fd, "--hidden", "--no-ignore", "--glob", query, abs_path],
+                    [fd, "--hidden", "--no-ignore", "--glob", "--", query, abs_path],
                     capture_output=True,
                     text=True,
                     timeout=30,

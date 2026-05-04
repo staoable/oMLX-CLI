@@ -54,6 +54,10 @@ def _parse_dotenv_file(path: Path) -> dict[str, str]:
 def load_dotenv_files(repo_root: Path) -> None:
     """将 `repo_root/.env` 与 `repo_root/.env.local` 合并进环境变量。"""
     frozen = set(os.environ.keys())
+    override_allow_prefixes = (
+        "OMLXCLI_CLAUDE_CODE_",
+        "ANTHROPIC_",
+    )
     merged: dict[str, str] = {}
     for fname in (".env", ".env.local"):
         path = repo_root / fname
@@ -61,6 +65,6 @@ def load_dotenv_files(repo_root: Path) -> None:
             continue
         merged.update(_parse_dotenv_file(path))
     for key, val in merged.items():
-        if key in frozen:
+        if key in frozen and not key.startswith(override_allow_prefixes):
             continue
         os.environ[key] = val

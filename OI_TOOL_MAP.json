@@ -17,6 +17,30 @@
       "invoke": "run_skill"
     },
     {
+      "name": "claude_job_cancel",
+      "source_file": "claude_job_skill.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "claude_job_logs",
+      "source_file": "claude_job_skill.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "claude_job_start",
+      "source_file": "claude_job_skill.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "claude_job_status",
+      "source_file": "claude_job_skill.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
       "name": "csv_tsv_summary",
       "source_file": "spreadsheet.py",
       "web_status": "implemented",

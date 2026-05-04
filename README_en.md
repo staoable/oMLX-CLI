@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/FastAPI-0.109+-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
-  <img src="https://img.shields.io/badge/version-0.2.0-555555" alt="version 0.2.0" />
+  <img src="https://img.shields.io/badge/version-0.2.1-555555" alt="version 0.2.1" />
 </p>
 
 A **production-ready, self-hostable web workspace** for **OpenAI-compatible** local or remote LLMs: multi-session chat, agent-style **shell / skill execution**, multimodal attachments, and an extensible **skills** layer (PDF, weather, web, vision, audio on supported platforms).
@@ -70,9 +70,16 @@ cd oMLX-CLI
 
 ./bootstrap.sh
 cp .env.example .env.local
-# Edit .env.local: data dir, search gateway, etc. Web upstream is only in SQLite via UI “Model settings” (see Configuration)
+# Edit .env.local: data dir, search gateway, etc. Web upstream is only in SQLite via UI “Vendor (Model settings)” (see Configuration)
 
 ./start_web.sh
+```
+
+`bootstrap.sh` defaults to auto-installing macOS system deps (`ripgrep`, `fd`, `ffmpeg`, `poppler`, `tesseract`) and Playwright Chromium.
+If you need to skip these in CI or constrained environments:
+
+```bash
+AUTO_INSTALL_SYSTEM_DEPS=0 AUTO_INSTALL_PLAYWRIGHT_CHROMIUM=0 ./bootstrap.sh
 ```
 
 - Default UI: [http://127.0.0.1:8788/ui/](http://127.0.0.1:8788/ui/)
@@ -86,8 +93,13 @@ Use **`.venv/bin/python`** for scripts so dependencies (PyMuPDF, conditional mlx
 
 - **Template**: **`.env.example`** — copy to **`.env.local`** (gitignored).
 - **Load order**: `webapi/dotenv_loader.py` loads `.env` then **`.env.local`**; values already present in the environment are not overwritten. `start_web.sh` also `source`s these files.
-- **Model settings (Web)**: Add at least one row; **`api_base` / `api_key` / default model** live in **`sessions.db`** (`vendors`); bind a row per session in Settings before chat or LLM-using Skills. **Do not** use `OI_API_BASE` / `OI_API_KEY` in `.env.local` for the web UI (removed from **`.env.example`**; delete stale keys locally if present).
+- **Vendor (Model settings, Web)**: Add at least one row; **`api_base` / `api_key` / default model** live in **`sessions.db`** (`vendors`); bind a row per session in Settings before chat or LLM-using Skills. **Do not** use `OI_API_BASE` / `OI_API_KEY` in `.env.local` for the web UI (removed from **`.env.example`**; delete stale keys locally if present).
 - **Typical `.env.local` keys**: `OMLXCLI_DATA_DIR`, `OMLXCLI_DEFAULT_WORKSPACE`, `OMLXCLI_RUN_SKILL_TIMEOUT_SEC`, `OMLXCLI_CHAT_*`, `OMLXCLI_SEARCH_*` / `OMLXCLI_SEARXNG_URL`, etc. Default model id for new sessions and legacy placeholder resolution use **`DEFAULT_SESSION_MODEL_ID`** in code plus the bound vendor’s **`default_model`**—no **`OI_MODEL`** env. See **`.env.example`**.
+- **Do not miss these production guards**:
+  - rate limit: `OMLXCLI_MSG_RATE_LIMIT_COUNT`, `OMLXCLI_MSG_RATE_LIMIT_WINDOW_SEC`
+  - payload limits: `OMLXCLI_MSG_MAX_BODY_BYTES`, `OMLXCLI_MSG_MAX_ATTACHMENTS_BYTES`
+  - media cache cleanup: `OMLXCLI_MEDIA_CACHE_TTL_SEC`, `OMLXCLI_MEDIA_CACHE_CLEANUP_INTERVAL_SEC`
+  - Claude job stale-running reaper: `OMLXCLI_CLAUDE_JOB_REAPER_INTERVAL_SEC`
 
 ---
 
@@ -96,7 +108,7 @@ Use **`.venv/bin/python`** for scripts so dependencies (PyMuPDF, conditional mlx
 **Sessions**
 
 - Create, switch, delete sessions; auto-generated titles, manual edit, title lock.
-- Per-session model and **bound model settings** (`vendors` row), workspace path, and execution policy.
+- Per-session model and **bound vendor (model settings)** (`vendors` row), workspace path, and execution policy.
 
 **Model & streaming**
 
@@ -171,7 +183,7 @@ The repository home **`README.md`** includes the **maintainer reference environm
 | `IMPLEMENTATION_PLAN.md` | Status, code pointers, optional evolution; keep in sync with matrix/API docs. |
 | `OI_CAPABILITY_MATRIX.md` | Capability list (implemented / partial / missing). |
 | `docs/API.md` | **HTTP API** (custom frontends, SSE, errors); complements **`/docs`** OpenAPI. |
-| `docs/UPSTREAM_VENDOR_IMPLEMENTATION.md` | Model settings: credentials, binding, DB ops (REST details in **`docs/API.md`**). |
+| `docs/UPSTREAM_VENDOR_IMPLEMENTATION.md` | Vendor (model settings): credentials, binding, DB ops (REST details in **`docs/API.md`**). |
 | `CHANGELOG.md` | Release notes (tracks `webapi` FastAPI `version`). |
 
 ---
@@ -190,7 +202,7 @@ Issues and pull requests are welcome. Do **not** commit secrets—use **`.env.lo
 
 ## License
 
-Add a root **`LICENSE`** file (e.g. MIT, Apache-2.0) when you publish under explicit terms; downstream users and packagers expect it.
+This repository ships a root **`LICENSE`** file (MIT).
 
 ---
 

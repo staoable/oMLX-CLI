@@ -369,7 +369,7 @@ def web_search(
       sort_by: 'relevance'（默认）或 'time'
       site_whitelist: 域名白名单，如 ['openai.com', 'arxiv.org']
       preferred_sites: 偏好站点（用于相关性加权），不做硬过滤
-      gateway_url: v2 检索网关地址（如 https://dog.lqai.cn 或 https://dog.lqai.cn/search）
+      gateway_url: v2 检索网关地址（如 https://$url 或 https://$url/search）
       gateway_refresh: 是否强刷 v2 缓存（默认 True）
     """
     q = (query or "").strip()

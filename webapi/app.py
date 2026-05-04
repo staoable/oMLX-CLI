@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
+from collections import deque
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from webapi.context_manager import ContextManager
+from webapi.claude_job_runtime import configure_claude_job_runtime, get_claude_job_service
+from webapi.claude_job_service import claude_code_public_status
 from webapi.logging_utils import log_event
 from webapi.session_engine import DEFAULT_SESSION_MODEL_ID, OiSessionEngine
 from webapi.session_store import SessionStore
@@ -38,8 +42,78 @@ DEFAULT_WORKSPACE = os.path.abspath(
 )
 
 store = SessionStore(str(DB_PATH))
+configure_claude_job_runtime(store=store, jobs_root=DATA_DIR / "claude-jobs")
 ctx = ContextManager(store)
 engine = OiSessionEngine(store, ctx)
+
+_msg_rate_lock = threading.Lock()
+_msg_rate_hits: dict[str, deque[float]] = {}
+
+
+def _msg_rate_limit_count() -> int:
+    raw = (os.getenv("OMLXCLI_MSG_RATE_LIMIT_COUNT") or "20").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 20
+    return max(1, min(n, 500))
+
+
+def _msg_rate_limit_window_sec() -> int:
+    raw = (os.getenv("OMLXCLI_MSG_RATE_LIMIT_WINDOW_SEC") or "60").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 60
+    return max(1, min(n, 3600))
+
+
+def _allow_message_request(session_id: str, client_ip: str) -> tuple[bool, int]:
+    limit = _msg_rate_limit_count()
+    window = float(_msg_rate_limit_window_sec())
+    now = time.monotonic()
+    key = f"{session_id}:{client_ip or '-'}"
+    with _msg_rate_lock:
+        q = _msg_rate_hits.get(key)
+        if q is None:
+            q = deque()
+            _msg_rate_hits[key] = q
+        cutoff = now - window
+        while q and q[0] < cutoff:
+            q.popleft()
+        if len(q) >= limit:
+            retry_after = max(1, int(window - (now - q[0])))
+            return False, retry_after
+        q.append(now)
+    return True, 0
+
+
+def _msg_max_body_bytes() -> int:
+    raw = (os.getenv("OMLXCLI_MSG_MAX_BODY_BYTES") or "5242880").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 5 * 1024 * 1024
+    return max(64 * 1024, min(n, 50 * 1024 * 1024))
+
+
+def _msg_max_attachments_bytes() -> int:
+    raw = (os.getenv("OMLXCLI_MSG_MAX_ATTACHMENTS_BYTES") or "6291456").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 6 * 1024 * 1024
+    return max(64 * 1024, min(n, 200 * 1024 * 1024))
+
+
+def _estimate_attachments_bytes(attachments: list[dict[str, Any]]) -> int:
+    total = 0
+    for a in attachments or []:
+        declared = int(a.get("size") or 0)
+        data_url = str(a.get("data_url") or "")
+        # data_url 通常是 base64 文本，估算用字符长度，取与 declared 的较大值更保守。
+        total += max(0, declared, len(data_url))
+    return total
 
 
 def _vendor_dict(v: Any, *, include_api_key: bool = False) -> dict[str, Any]:
@@ -49,7 +123,7 @@ def _vendor_dict(v: Any, *, include_api_key: bool = False) -> dict[str, Any]:
         d.pop("api_key", None)
     return d
 
-app = FastAPI(title=APP_NAME, version="0.2.0")
+app = FastAPI(title=APP_NAME, version="0.2.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -294,6 +368,21 @@ def list_vendors() -> list[dict[str, Any]]:
     return [_vendor_dict(v) for v in store.list_vendors()]
 
 
+@app.get("/api/vendors/default")
+def get_default_vendor() -> dict[str, Any]:
+    return {"vendor_id": store.get_default_vendor_id()}
+
+
+@app.put("/api/vendors/default")
+def set_default_vendor(payload: dict[str, Any]) -> dict[str, Any]:
+    raw = (payload.get("vendor_id") if isinstance(payload, dict) else None) or None
+    try:
+        vid = store.set_default_vendor_id(str(raw).strip() if raw is not None else None)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"vendor_id": vid}
+
+
 @app.get("/api/vendors/{vendor_id}")
 def get_vendor_row(vendor_id: str) -> dict[str, Any]:
     try:
@@ -352,9 +441,10 @@ def create_session(req: CreateSessionReq) -> dict[str, Any]:
     model = req.model
     api_base = (req.api_base or "").strip().rstrip("/")
     vendor_id: str | None = None
-    if (req.vendor_id or "").strip():
+    requested_vendor = (req.vendor_id or "").strip() or store.get_default_vendor_id()
+    if requested_vendor:
         try:
-            v = store.get_vendor(req.vendor_id.strip())
+            v = store.get_vendor(requested_vendor)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         vendor_id = v.id
@@ -454,7 +544,39 @@ def batch_archive_sessions(req: BatchArchiveSessionsReq) -> dict[str, Any]:
 
 
 @app.post("/api/sessions/{session_id}/messages")
-def send_message(session_id: str, req: SendMessageReq) -> StreamingResponse:
+def send_message(session_id: str, req: SendMessageReq, request: Request) -> StreamingResponse:
+    content_len = request.headers.get("content-length") or ""
+    if content_len:
+        try:
+            body_n = int(content_len)
+        except ValueError:
+            body_n = 0
+        if body_n > _msg_max_body_bytes():
+            detail = _error_payload(
+                code="PAYLOAD_TOO_LARGE",
+                message=f"请求体过大（>{_msg_max_body_bytes()} bytes）。",
+                request_id=getattr(request.state, "request_id", str(uuid.uuid4())),
+            )
+            raise HTTPException(status_code=413, detail=detail)
+    att_n = _estimate_attachments_bytes(req.attachments)
+    if att_n > _msg_max_attachments_bytes():
+        detail = _error_payload(
+            code="ATTACHMENTS_TOO_LARGE",
+            message=f"附件总大小过大（>{_msg_max_attachments_bytes()} bytes）。",
+            request_id=getattr(request.state, "request_id", str(uuid.uuid4())),
+        )
+        raise HTTPException(status_code=413, detail=detail)
+    client_ip = ""
+    if request.client and request.client.host:
+        client_ip = str(request.client.host)
+    ok, retry_after = _allow_message_request(session_id, client_ip)
+    if not ok:
+        detail = _error_payload(
+            code="RATE_LIMITED",
+            message=f"请求过于频繁，请 {retry_after} 秒后重试。",
+            request_id=getattr(request.state, "request_id", str(uuid.uuid4())),
+        )
+        raise HTTPException(status_code=429, detail=detail)
     log_event("session_message_received", session_id=session_id, content_chars=len(req.content or ""))
     def event_stream():
         try:
@@ -536,6 +658,123 @@ def list_agent_trace(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return store.list_agent_trace(session_id, turn_id=turn_id, limit=limit)
+
+
+def _claude_job_list_brief(row: dict[str, Any]) -> dict[str, Any]:
+    p = str(row.get("prompt") or "")
+    prev = p[:160] + ("…" if len(p) > 160 else "")
+    return {
+        "id": row["id"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "exit_code": row["exit_code"],
+        "prompt_preview": prev,
+        "workspace_path": row["workspace_path"],
+        "pid": row["pid"],
+    }
+
+
+@app.get("/api/claude-code/status")
+def claude_code_status() -> dict[str, Any]:
+    return claude_code_public_status()
+
+
+@app.get("/api/sessions/{session_id}/claude-jobs")
+def list_claude_jobs_api(
+    session_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    try:
+        _ = store.get_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    st = claude_code_public_status()
+    if not st["enabled"]:
+        return {"enabled": False, "jobs": [], **st}
+    rows = get_claude_job_service().list_jobs(session_id, limit=limit)
+    return {"enabled": True, "jobs": [_claude_job_list_brief(r) for r in rows], **st}
+
+
+@app.get("/api/sessions/{session_id}/claude-jobs/{job_id}")
+def get_claude_job_api(session_id: str, job_id: str, request: Request) -> dict[str, Any]:
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    st = claude_code_public_status()
+    if not st["enabled"]:
+        raise HTTPException(
+            status_code=501,
+            detail=_error_payload(
+                code="CLAUDE_CODE_DISABLED",
+                message=st["reason"] or "Claude Code Job 不可用",
+                request_id=request_id,
+            ),
+        )
+    try:
+        row = get_claude_job_service().get_job(session_id, job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=_error_payload(code="FORBIDDEN", message=str(exc), request_id=request_id),
+        ) from exc
+    return {"enabled": True, "job": row}
+
+
+@app.get("/api/sessions/{session_id}/claude-jobs/{job_id}/logs")
+def get_claude_job_logs_api(
+    session_id: str,
+    job_id: str,
+    request: Request,
+    tail: int = Query(default=200, ge=1, le=5000),
+) -> dict[str, Any]:
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    st = claude_code_public_status()
+    if not st["enabled"]:
+        raise HTTPException(
+            status_code=501,
+            detail=_error_payload(
+                code="CLAUDE_CODE_DISABLED",
+                message=st["reason"] or "Claude Code Job 不可用",
+                request_id=request_id,
+            ),
+        )
+    try:
+        text = get_claude_job_service().tail_logs(session_id, job_id, tail_lines=tail)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=_error_payload(code="FORBIDDEN", message=str(exc), request_id=request_id),
+        ) from exc
+    return {"enabled": True, "tail": tail, "text": text}
+
+
+@app.post("/api/sessions/{session_id}/claude-jobs/{job_id}/cancel")
+def cancel_claude_job_api(session_id: str, job_id: str, request: Request) -> dict[str, Any]:
+    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
+    st = claude_code_public_status()
+    if not st["enabled"]:
+        raise HTTPException(
+            status_code=501,
+            detail=_error_payload(
+                code="CLAUDE_CODE_DISABLED",
+                message=st["reason"] or "Claude Code Job 不可用",
+                request_id=request_id,
+            ),
+        )
+    try:
+        out = get_claude_job_service().cancel_job(session_id, job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=_error_payload(code="FORBIDDEN", message=str(exc), request_id=request_id),
+        ) from exc
+    log_event("claude_job_cancel", session_id=session_id, job_id=job_id)
+    return {"enabled": True, **out}
 
 
 @app.get("/api/admin/sessions/{session_id}/audit-export")

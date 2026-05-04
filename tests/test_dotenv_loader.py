@@ -40,3 +40,33 @@ class DotenvLoaderTest(unittest.TestCase):
                 os.environ.pop(k, None)
                 if saved.get(k) is not None:
                     os.environ[k] = saved[k]  # type: ignore[index]
+
+    def test_claude_env_can_override_existing_process_env(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        (root / ".env.local").write_text(
+            (
+                "OMLXCLI_CLAUDE_CODE_API_KEY=from_local_key\n"
+                "ANTHROPIC_BASE_URL=https://local.example\n"
+                "OMLXCLI_DOTENV_TEST_X=from_local_x\n"
+            ),
+            encoding="utf-8",
+        )
+        keys = (
+            "OMLXCLI_CLAUDE_CODE_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "OMLXCLI_DOTENV_TEST_X",
+        )
+        saved = {k: os.environ.get(k) for k in keys}
+        try:
+            os.environ["OMLXCLI_CLAUDE_CODE_API_KEY"] = "from_process_old_key"
+            os.environ["ANTHROPIC_BASE_URL"] = "https://process.example"
+            os.environ["OMLXCLI_DOTENV_TEST_X"] = "from_process_x"
+            load_dotenv_files(root)
+            self.assertEqual(os.environ.get("OMLXCLI_CLAUDE_CODE_API_KEY"), "from_local_key")
+            self.assertEqual(os.environ.get("ANTHROPIC_BASE_URL"), "https://local.example")
+            self.assertEqual(os.environ.get("OMLXCLI_DOTENV_TEST_X"), "from_process_x")
+        finally:
+            for k in keys:
+                os.environ.pop(k, None)
+                if saved.get(k) is not None:
+                    os.environ[k] = saved[k]  # type: ignore[index]

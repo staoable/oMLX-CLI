@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import ast
 import builtins
-import concurrent.futures
+import contextvars
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 from types import CodeType
 from typing import Any
 
+from webapi.logging_utils import log_event
 from webapi.skill_manifest import load_skill_manifests, validate_skill_ast_call
 
 
@@ -42,7 +44,13 @@ def load_skills_registry() -> tuple[dict[str, Any], str]:
             if name and callable(fn):
                 funcs[name] = fn
         return funcs, tools_md
-    except Exception:
+    except Exception as exc:
+        log_event(
+            "skill_registry_load_error",
+            skills_dir=skills_dir_s,
+            error_type=type(exc).__name__,
+            message=str(exc)[:300],
+        )
         return {}, ""
 
 
@@ -82,23 +90,35 @@ def run_skill_call(expr: str, funcs: dict[str, Any]) -> dict[str, Any]:
 
         compiled = compile(node, "<run_skill>", "eval")
         timeout_sec = _run_skill_timeout_sec()
+        ctx = contextvars.copy_context()
+
+        def _run_eval() -> Any:
+            return _eval_skill(compiled, funcs)
+
         if timeout_sec <= 0:
-            res = _eval_skill(compiled, funcs)
+            res = ctx.run(_run_eval)
         else:
-            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            try:
-                fut = pool.submit(_eval_skill, compiled, funcs)
+            out: dict[str, Any] = {}
+            err: dict[str, BaseException] = {}
+
+            def _runner() -> None:
                 try:
-                    res = fut.result(timeout=timeout_sec)
-                except concurrent.futures.TimeoutError:
-                    return {
-                        "exit_code": 1,
-                        "stdout": "",
-                        "stderr": f"run_skill 超时（>{timeout_sec} 秒），已中断。",
-                    }
-            finally:
-                # 避免 with 默认 wait=True：超时后仍阻塞至子线程结束
-                pool.shutdown(wait=False, cancel_futures=False)
+                    out["res"] = ctx.run(_run_eval)
+                except BaseException as exc:  # noqa: BLE001
+                    err["exc"] = exc
+
+            t = threading.Thread(target=_runner, daemon=True, name="run-skill-worker")
+            t.start()
+            t.join(timeout=float(timeout_sec))
+            if t.is_alive():
+                return {
+                    "exit_code": 1,
+                    "stdout": "",
+                    "stderr": f"run_skill 超时（>{timeout_sec} 秒），已中断。",
+                }
+            if "exc" in err:
+                raise err["exc"]
+            res = out.get("res")
         if isinstance(res, (dict, list)):
             out = json.dumps(res, ensure_ascii=False, indent=2)
         else:

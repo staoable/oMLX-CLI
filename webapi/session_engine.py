@@ -1,16 +1,31 @@
 from __future__ import annotations
 
+import json
 import os
 from contextlib import contextmanager
+from pathlib import Path
 import re
 import subprocess
 import time
 import uuid
 import urllib.error
+import importlib.util
 from dataclasses import dataclass
 from typing import Any, Generator
 
-from oi_runtime_core import auto_context_window, chat_completion_once, stream_chat_completions
+try:
+    from oi_runtime_core import auto_context_window, chat_completion_once, stream_chat_completions
+except ModuleNotFoundError:
+    # 部署环境若未把仓库根目录加入 PYTHONPATH，则回退按文件路径加载同仓库模块。
+    _runtime_path = Path(__file__).resolve().parent.parent / "oi_runtime_core.py"
+    _runtime_spec = importlib.util.spec_from_file_location("oi_runtime_core", _runtime_path)
+    if _runtime_spec is None or _runtime_spec.loader is None:
+        raise
+    _runtime_mod = importlib.util.module_from_spec(_runtime_spec)
+    _runtime_spec.loader.exec_module(_runtime_mod)
+    auto_context_window = _runtime_mod.auto_context_window
+    chat_completion_once = _runtime_mod.chat_completion_once
+    stream_chat_completions = _runtime_mod.stream_chat_completions
 from webapi.context_manager import ContextManager
 from webapi.engine_protocol import (
     CONFIRM_EXEC_RE,
@@ -26,6 +41,7 @@ from webapi.config import load_execution_policy_config
 from webapi.execution_policy import check_command_policy
 from webapi.logging_utils import log_event
 from webapi.session_store import SessionRecord, SessionStore
+from webapi.skill_context import skill_run_context
 from webapi.skill_runner import load_skills_registry, run_skill_call
 from webapi.upstream_credentials import resolve_upstream_credentials
 
@@ -70,6 +86,52 @@ def _approx_tokens(text: str) -> int:
     if not text:
         return 0
     return max(1, int(len(text) * 0.45))
+
+
+def _skill_name_from_expr(expr: str) -> str:
+    s = (expr or "").strip()
+    m = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", s)
+    return m.group(1) if m else ""
+
+
+def _stable_claude_job_start_answer(skill_ret: dict[str, Any]) -> str | None:
+    raw_exit = skill_ret.get("exit_code")
+    try:
+        exit_code = int(raw_exit)
+    except (TypeError, ValueError):
+        exit_code = 1
+    if exit_code != 0:
+        err = str(skill_ret.get("stderr") or "").strip() or "未知错误"
+        return f"Claude 任务启动失败：{err}"
+    try:
+        data = json.loads(str(skill_ret.get("stdout") or "{}"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if not bool(data.get("ok")):
+        return f"Claude 任务启动失败：{str(data.get('message') or '未知错误').strip()}"
+
+    job_id = str(data.get("job_id") or "").strip()
+    status = str(data.get("status") or "").strip() or "unknown"
+    hint = str(data.get("hint") or "").strip()
+    queued_after = str(data.get("queued_after_job_id") or "").strip()
+
+    lines: list[str] = []
+    if status == "queued":
+        lines.append(f"Claude 分析任务（job_id: `{job_id}`）已入队，正在等待前序任务完成。")
+        if queued_after:
+            lines.append(f"- 前序运行中任务：`{queued_after}`")
+    else:
+        lines.append(f"Claude 分析任务（job_id: `{job_id}`）已启动，当前状态：`{status}`。")
+    lines.append("")
+    lines.append("你可以稍后执行：")
+    lines.append(f"- `claude_job_status('{job_id}')` 查看状态")
+    lines.append(f"- `claude_job_logs('{job_id}', tail_lines=400)` 获取日志")
+    if hint:
+        lines.append("")
+        lines.append(f"提示：{hint}")
+    return "\n".join(lines)
 
 
 
@@ -124,6 +186,9 @@ class OiSessionEngine:
             api_base, api_key = resolve_upstream_credentials(session, self.store)
         except KeyError:
             msg = "会话绑定的模型设置不存在或已删除，请在设置中重新选择。"
+            self.store.add_message(session_id=session_id, role="assistant", content=msg, kind="error")
+            yield {"type": "error", "content": msg}
+            return msg
         except RuntimeError as exc:
             msg = str(exc)
             self.store.add_message(session_id=session_id, role="assistant", content=msg, kind="error")
@@ -564,7 +629,7 @@ class OiSessionEngine:
                     api_base=config.api_base,
                     api_key=config.api_key,
                     model=config.model,
-                ):
+                ), skill_run_context(session_id=session_id, workdir=workdir):
                     skill_ret = run_skill_call(skill_expr, skill_funcs)
                 log_event(
                     "exec_finished",
@@ -603,6 +668,11 @@ class OiSessionEngine:
                     "stderr": skill_ret["stderr"],
                 }
                 executed_any = True
+                if _skill_name_from_expr(skill_expr) == "claude_job_start":
+                    stable = _stable_claude_job_start_answer(skill_ret)
+                    if stable:
+                        final_answer = stable
+                        break
                 convo.append({"role": "assistant", "content": f"<run_skill>{skill_expr}</run_skill>"})
                 convo.append(
                     {
@@ -764,9 +834,14 @@ class OiSessionEngine:
                 elif finalize_text:
                     final_answer = re.sub(r"</?run_shell>", "", finalize_text, flags=re.IGNORECASE)
                     final_answer = re.sub(r"</?run_skill>", "", final_answer, flags=re.IGNORECASE).strip()
-            except Exception:  # noqa: BLE001
-                # 保底走通，不让一次收敛失败破坏主流程
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # 保底走通，不让一次收敛失败破坏主流程；至少记录可观测日志。
+                log_event(
+                    "llm_finalize_error",
+                    session_id=session_id,
+                    error_type=type(exc).__name__,
+                    message=str(exc)[:300],
+                )
 
         if not final_answer:
             if executed_any:

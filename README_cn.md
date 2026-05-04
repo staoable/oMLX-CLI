@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/FastAPI-0.109+-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
-  <img src="https://img.shields.io/badge/version-0.2.0-555555" alt="version 0.2.0" />
+  <img src="https://img.shields.io/badge/version-0.2.1-555555" alt="version 0.2.1" />
 </p>
 
 **可自托管、可交付使用的 Web 助手工作台**：对接 **OpenAI 兼容**的本地或远端大模型，提供多会话流式对话、**类代理执行**（`run_shell` / `run_skill`）、多模态附件，以及可扩展的 **Skills**（PDF、天气、网页、笔记、视觉与音视频等）。
@@ -70,9 +70,16 @@ cd oMLX-CLI
 
 ./bootstrap.sh
 cp .env.example .env.local
-# 编辑 .env.local：数据目录、搜索网关等；Web 对话上游仅在界面「模型设置」→ SQLite（见下节）
+# 编辑 .env.local：数据目录、搜索网关等；Web 对话上游仅在界面「供应商（模型设置）」→ SQLite（见下节）
 
 ./start_web.sh
+```
+
+`bootstrap.sh` 默认会在 macOS 自动安装系统依赖（`ripgrep`、`fd`、`ffmpeg`、`poppler`、`tesseract`）以及 Playwright Chromium。
+若在 CI 或受限环境需要跳过，可使用：
+
+```bash
+AUTO_INSTALL_SYSTEM_DEPS=0 AUTO_INSTALL_PLAYWRIGHT_CHROMIUM=0 ./bootstrap.sh
 ```
 
 - 默认界面：[http://127.0.0.1:8788/ui/](http://127.0.0.1:8788/ui/)
@@ -86,8 +93,13 @@ cp .env.example .env.local
 
 - **模板**：根目录 **`.env.example`**，推荐复制为 **`.env.local`**（已在 `.gitignore`，勿提交密钥）。
 - **加载**：`import webapi.app` 时由 `webapi/dotenv_loader.py` 读取 `.env` 与 **`.env.local`**；**已在进程环境中的变量不会被文件覆盖**。`./start_web.sh` 也会 `source` 上述文件。
-- **模型设置（Web）**：在界面至少添加一条；**`api_base` / `api_key` / 默认模型** 在 **`sessions.db` 的 `vendors` 表**；会话在设置中绑定后才能对话与使用依赖 LLM 的 Skills。**不要**再在 `.env.local` 里配 `OI_API_BASE` / `OI_API_KEY` 作为 Web 上游（模板已移除；若本地仍有旧键可删掉以免混淆）。
-- **`.env.local` 常用项**：`OMLXCLI_DATA_DIR`、`OMLXCLI_DEFAULT_WORKSPACE`、`OMLXCLI_RUN_SKILL_TIMEOUT_SEC`、`OMLXCLI_CHAT_*`、`OMLXCLI_SEARCH_*` / `OMLXCLI_SEARXNG_URL` 等。新建会话默认 model、旧占位名回退由代码 **`DEFAULT_SESSION_MODEL_ID`** 与已绑定模型设置的 **`default_model`** 决定，**无需** `OI_MODEL`。逐项说明见 **`.env.example`**。
+- **供应商（模型设置，Web）**：在界面至少添加一条；**`api_base` / `api_key` / 默认模型** 在 **`sessions.db` 的 `vendors` 表**；会话在设置中绑定后才能对话与使用依赖 LLM 的 Skills。**不要**再在 `.env.local` 里配 `OI_API_BASE` / `OI_API_KEY` 作为 Web 上游（模板已移除；若本地仍有旧键可删掉以免混淆）。
+- **`.env.local` 常用项**：`OMLXCLI_DATA_DIR`、`OMLXCLI_DEFAULT_WORKSPACE`、`OMLXCLI_RUN_SKILL_TIMEOUT_SEC`、`OMLXCLI_CHAT_*`、`OMLXCLI_SEARCH_*` / `OMLXCLI_SEARXNG_URL` 等。新建会话默认 model、旧占位名回退由代码 **`DEFAULT_SESSION_MODEL_ID`** 与已绑定供应商（模型设置）的 **`default_model`** 决定，**无需** `OI_MODEL`。逐项说明见 **`.env.example`**。
+- **上线加固建议务必配置**：
+  - 限流：`OMLXCLI_MSG_RATE_LIMIT_COUNT`、`OMLXCLI_MSG_RATE_LIMIT_WINDOW_SEC`
+  - 请求体限制：`OMLXCLI_MSG_MAX_BODY_BYTES`、`OMLXCLI_MSG_MAX_ATTACHMENTS_BYTES`
+  - 多模态缓存清理：`OMLXCLI_MEDIA_CACHE_TTL_SEC`、`OMLXCLI_MEDIA_CACHE_CLEANUP_INTERVAL_SEC`
+  - Claude 任务僵尸回收：`OMLXCLI_CLAUDE_JOB_REAPER_INTERVAL_SEC`
 
 ---
 
@@ -96,11 +108,11 @@ cp .env.example .env.local
 **会话**
 
 - 新建、切换、删除会话；标题自动生成、手动编辑、标题锁定。
-- 每会话独立配置：模型、**绑定的模型设置**、工作目录、执行策略等。
+- 每会话独立配置：模型、**绑定的供应商（模型设置）**、工作目录、执行策略等。
 
 **模型与流式**
 
-- 在 Web「模型设置」中配置 **`vendors`** 后，按会话绑定的 **`vendor_id`** 调用 **`GET /api/models?vendor_id=…`** 拉取上游列表；SSE 流式输出；完成后写入助手消息与粗粒度性能字段。
+- 在 Web「供应商（模型设置）」中配置 **`vendors`** 后，按会话绑定的 **`vendor_id`** 调用 **`GET /api/models?vendor_id=…`** 拉取上游列表；SSE 流式输出；完成后写入助手消息与粗粒度性能字段。
 
 **执行代理**
 
@@ -171,7 +183,7 @@ GitHub Actions（`.github/workflows/ci.yml`）：安装依赖与 Playwright Chro
 | `IMPLEMENTATION_PLAN.md` | 能力状态速查、代码落点、可选演进；与矩阵/API 文档联动。 |
 | `OI_CAPABILITY_MATRIX.md` | 能力清单（已实现 / 部分 / 未实现）。 |
 | `docs/API.md` | **HTTP API**（自建前端、SSE、错误格式）；与 **`/docs`** OpenAPI 互补。 |
-| `docs/UPSTREAM_VENDOR_IMPLEMENTATION.md` | 模型设置：凭据、绑定、SQLite 运维（REST 细节见 **`docs/API.md`**）。 |
+| `docs/UPSTREAM_VENDOR_IMPLEMENTATION.md` | 供应商（模型设置）：凭据、绑定、SQLite 运维（REST 细节见 **`docs/API.md`**）。 |
 | `CHANGELOG.md` | 变更记录（与 `webapi` 中 FastAPI `version` 字段同步）。 |
 
 ---
@@ -190,7 +202,7 @@ GitHub Actions（`.github/workflows/ci.yml`）：安装依赖与 Playwright Chro
 
 ## 许可证
 
-正式对外发布时，请在仓库根目录添加 **`LICENSE`**（如 MIT、Apache-2.0），便于贡献者与下游引用。
+本仓库已包含根目录 **`LICENSE`**（MIT）。
 
 ---
 

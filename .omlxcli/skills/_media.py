@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -33,6 +34,7 @@ _DEFAULT_VIDEO_FRAMES = 16
 # 维护的 `mlx-whisper`（pip 包），权重从 HuggingFace 拉取，纯本地推理。
 # 默认仓库：4bit 量化的 large-v3，约 1.5GB，中文识别质量好且速度快。
 _DEFAULT_STT_REPO = "mlx-community/whisper-large-v3-mlx-4bit"
+_LAST_CACHE_CLEANUP_AT = 0.0
 
 
 def media_kind(path: str) -> str | None:
@@ -57,10 +59,58 @@ def resolve_path(path: str) -> str:
 
 def cache_dir() -> str:
     """`.aicli/cache/` —— 视频抽帧/音轨临时存放目录。"""
+    global _LAST_CACHE_CLEANUP_AT
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     d = os.path.join(here, "cache")
     os.makedirs(d, exist_ok=True)
+    now = time.monotonic()
+    if now - _LAST_CACHE_CLEANUP_AT >= _cache_cleanup_interval_sec():
+        _cleanup_cache_once(d)
+        _LAST_CACHE_CLEANUP_AT = now
     return d
+
+
+def _cache_ttl_sec() -> int:
+    raw = (os.getenv("OMLXCLI_MEDIA_CACHE_TTL_SEC") or "259200").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 3 * 24 * 3600
+    return max(3600, min(n, 30 * 24 * 3600))
+
+
+def _cache_cleanup_interval_sec() -> int:
+    raw = (os.getenv("OMLXCLI_MEDIA_CACHE_CLEANUP_INTERVAL_SEC") or "900").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 900
+    return max(60, min(n, 24 * 3600))
+
+
+def _cleanup_cache_once(cache_root: str) -> None:
+    ttl = _cache_ttl_sec()
+    now = time.time()
+    try:
+        entries = os.listdir(cache_root)
+    except OSError:
+        return
+    for name in entries:
+        if not name.startswith("vid_"):
+            continue
+        p = os.path.join(cache_root, name)
+        if not os.path.isdir(p):
+            continue
+        try:
+            age = now - os.path.getmtime(p)
+        except OSError:
+            continue
+        if age < ttl:
+            continue
+        try:
+            shutil.rmtree(p, ignore_errors=True)
+        except OSError:
+            continue
 
 
 def _ext_to_format(ext: str, kind: str) -> str:

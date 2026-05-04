@@ -34,6 +34,7 @@ def repo_grep(pattern: str, path: str = ".", max_matches: int = 80) -> list[str]
                     "--max-count",
                     "1",
                     "-S",
+                    "--",
                     pattern,
                     root,
                 ],

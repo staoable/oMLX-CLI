@@ -17,6 +17,8 @@ def _safe_ref(ref: str) -> str:
         raise ValueError("ref 无效或过长")
     if s.startswith("-") or "\n" in s or "\r" in s:
         raise ValueError("ref 包含非法字符")
+    if ":" in s:
+        raise ValueError("ref 包含非法字符")
     bad = set('`$;&|<>()#*?')
     if any(c in s for c in bad):
         raise ValueError("ref 包含非法字符")

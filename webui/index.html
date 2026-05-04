@@ -42,6 +42,10 @@
                 <span class="btn__icon" aria-hidden="true">◇</span>
                 <span class="btn__text">模型设置</span>
               </button>
+              <button id="openClaudeJobsModalBtn" type="button" class="btn btn--toolbar btn--toolbar-muted" title="Claude Code 长任务（只读监控）">
+                <span class="btn__icon" aria-hidden="true">⏱</span>
+                <span class="btn__text">Claude</span>
+              </button>
               <button id="openDebugModalBtn" type="button" class="btn btn--toolbar btn--toolbar-muted" title="执行审计与上下文注入">
                 <span class="btn__icon" aria-hidden="true">◉</span>
                 <span class="btn__text">调试</span>
@@ -112,7 +116,7 @@
           <h3 id="settingsModalTitle">设置</h3>
           <button type="button" class="btn btn--ghost btn--icon modal__close" data-close-modal="settings" aria-label="关闭">×</button>
         </div>
-        <p class="modal__lede">模型、<strong>模型设置</strong>（OpenAI 兼容 HTTP 端点）、工作目录与 CLI 执行策略。须先在「模型设置」添加至少一条并保存 API Key，再在下方选择本会话使用的模型设置；未选择时无法对话。改完后请点「保存」。</p>
+        <p class="modal__lede">模型、<strong>供应商</strong>（OpenAI 兼容 HTTP 端点）、工作目录与 CLI 执行策略。须先在「模型设置」添加至少一条并保存 API Key，再在下方选择本会话使用的供应商；未选择时无法对话。改完后请点「保存」。</p>
         <div class="settings-layout">
           <section class="settings-card">
             <div class="settings-card__title">连接配置</div>
@@ -129,8 +133,8 @@
                 />
               </label>
               <label class="field field--vendor">
-                <span class="field__label">模型设置</span>
-                <select id="vendorSelect" class="input input--select" aria-label="模型设置"></select>
+                <span class="field__label">供应商</span>
+                <select id="vendorSelect" class="input input--select" aria-label="供应商"></select>
               </label>
               <div class="field-cluster field-cluster--model">
                 <label class="field field--model">
@@ -205,6 +209,13 @@
                 <select id="vendorFormDefaultModel" class="input input--select"></select>
               </label>
               <label class="field">
+                <span class="field__label">默认供应商</span>
+                <div class="toggle-row">
+                  <input id="vendorFormDefaultVendor" type="checkbox" />
+                  <span>设为新会话默认供应商</span>
+                </div>
+              </label>
+              <label class="field">
                 <span class="field__label">API Key（保存在本机数据库；列表接口不回显，单条读取时用于编辑与下载模型列表）</span>
                 <input
                   id="vendorFormApiKey"
@@ -224,6 +235,36 @@
             </div>
             <p id="vendorFormHint" class="modal__hint" aria-live="polite"></p>
           </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="claudeJobsModal" class="modal" hidden>
+      <div class="modal__backdrop" data-close-modal="claude-jobs"></div>
+      <div class="modal__panel modal__panel--debug" role="dialog" aria-modal="true" aria-labelledby="claudeJobsModalTitle">
+        <div class="modal__head">
+          <h3 id="claudeJobsModalTitle">Claude</h3>
+          <button type="button" class="btn btn--ghost btn--icon modal__close" data-close-modal="claude-jobs" aria-label="关闭">×</button>
+        </div>
+        <div class="claude-jobs-layout">
+          <div class="claude-jobs-main">
+            <section class="claude-jobs-list-wrap">
+              <div class="observability__head">
+                <span class="field__label">任务列表</span>
+                <div class="observability__actions">
+                  <button id="refreshClaudeJobsBtn" type="button" class="btn btn--ghost">刷新</button>
+                  <button id="cancelClaudeJobBtn" type="button" class="btn btn--ghost" disabled>取消</button>
+                </div>
+              </div>
+              <div id="claudeJobsList" class="claude-jobs-list" aria-live="polite"></div>
+            </section>
+            <section class="claude-jobs-detail-wrap">
+              <div class="observability__head">
+                <span class="field__label">Claude 对话</span>
+              </div>
+              <div id="claudeJobConversation" class="claude-conversation" aria-live="polite"></div>
+            </section>
+          </div>
         </div>
       </div>
     </div>

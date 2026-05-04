@@ -13,7 +13,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/FastAPI-0.109+-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
-  <img src="https://img.shields.io/badge/version-0.2.0-555555" alt="version 0.2.0" />
+  <img src="https://img.shields.io/badge/version-0.2.1-555555" alt="version 0.2.1" />
 </p>
 
 ---
@@ -63,12 +63,25 @@
 </p>
 
 <p align="center">
-  <b>Skills smoke · 全技能冒烟摘要</b><br/>
-  <img src="docs/readme/screenshot-skills-smoke.png" alt="Skills smoke terminal screenshot" width="720" loading="lazy" decoding="async" />
+  <b>Claude skills · Claude 任务管理</b><br/>
+  <img src="docs/readme/screenshot-claude-skills.png" alt="Claude skills task management screenshot" width="720" loading="lazy" decoding="async" />
+</p>
+
+<p align="center">
+  <b>Debug · 调试观测面板</b><br/>
+  <img src="docs/readme/screenshot-web-debug.png" alt="Debug panel screenshot" width="720" loading="lazy" decoding="async" />
 </p>
 
 
 ---
+
+## Claude Skills · 让专业工具做专业的事
+
+- **定位**：`claude_job_*` 把“长耗时、跨步骤、可恢复”的任务交给 **Claude Code CLI** 后台队列执行，避免阻塞主对话。
+- **方式**：在会话里由模型通过 `run_skill` 发起，返回 `job_id`；Web「Claude」面板只读监控（排队、运行、完成、失败、取消）。
+- **共享上下文**：同一会话采用 `queued -> running` 串行调度，前序完成后自动续接（`--resume` 语义），减少重复启动与上下文丢失。
+- **运维友好**：支持日志大小上限与保留清理（见 `.env.example` 第十一节），并可通过 `claude_job_status / claude_job_logs` 拉取过程与结果。
+- **上线加固配置**：支持消息限流与体积限制（`OMLXCLI_MSG_RATE_LIMIT_*` / `OMLXCLI_MSG_MAX_*`）、以及多模态缓存 TTL 清理（`OMLXCLI_MEDIA_CACHE_*`）。
 
 ## Try in 30 seconds · 快速体验
 
@@ -77,6 +90,9 @@ git clone https://github.com/staoable/oMLX-CLI.git && cd oMLX-CLI
 ./bootstrap.sh && cp .env.example .env.local   # data dir, search, etc.; add Web “Model settings” in UI for chat keys
 ./start_web.sh
 ```
+
+`bootstrap.sh` 默认会在 macOS 自动补齐系统依赖（`ripgrep`、`fd`、`ffmpeg`、`poppler`、`tesseract`）并安装 Playwright Chromium。若需跳过：
+`AUTO_INSTALL_SYSTEM_DEPS=0 AUTO_INSTALL_PLAYWRIGHT_CHROMIUM=0 ./bootstrap.sh`
 
 Then open **[http://127.0.0.1:8788/ui/](http://127.0.0.1:8788/ui/)** — or read **[README_en.md](README_en.md)** / **[README_cn.md](README_cn.md)** for ports, optional skills (PDF, search, Apple Silicon STT), and CI.
 

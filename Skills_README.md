@@ -20,6 +20,10 @@
 |------------------|----------|----------|
 | `audio_transcribe` | 音频转写 + 基于转写由 LLM 回答 | `.omlxcli/skills/audio.py` |
 | `audio_transcribe_only` | 仅音频转写为文字，不调 LLM | `.omlxcli/skills/audio.py` |
+| `claude_job_start` | 启动 Claude Code 后台任务（同会话串行队列，支持 `queued`） | `.omlxcli/skills/claude_job_skill.py` |
+| `claude_job_status` | 查询 Claude Job 状态（`queued/running/completed/failed/cancelled`） | `.omlxcli/skills/claude_job_skill.py` |
+| `claude_job_logs` | 读取 Claude Job 日志 tail（最多 5000 行） | `.omlxcli/skills/claude_job_skill.py` |
+| `claude_job_cancel` | 取消 Claude Job（支持取消 `running` 与 `queued`） | `.omlxcli/skills/claude_job_skill.py` |
 | `date_now` | 返回本机当前日期、时间、星期、时区等 | `.omlxcli/skills/clock.py` |
 | `csv_tsv_summary` | CSV/TSV 列名、行数、抽样行与数值列 min/max/mean | `.omlxcli/skills/spreadsheet.py` |
 | `xlsx_sample` | xlsx/xlsm 只读抽样（openpyxl read_only） | `.omlxcli/skills/spreadsheet.py` |
@@ -55,11 +59,11 @@
 |------|------|
 | 默认目录 | `<repo>/.omlxcli/skills/` |
 | 自定义目录 | 环境变量 **`OMLXCLI_SKILLS_DIR`**（目录须存在且含 **`manifests/skills.json`**） |
-| 兼容路径 | 若默认目录不存在，会尝试 **`.aicli/skills`**（见 `webapi/skill_runner.resolve_skills_dir`） |
+| 技能目录 | 固定使用 **`.omlxcli/skills`**（见 `webapi/skill_runner.resolve_skills_dir`） |
 | run_skill 超时 | **`OMLXCLI_RUN_SKILL_TIMEOUT_SEC`**（秒，`0` 表示不限制；默认 `120`），见 `webapi/skill_runner.py` |
 | 全量环境变量说明 | 仓库根 **`.env.example`**（逐项中文注释；Web 模型上游在 SQLite，不在此配 Base/Key）；可复制为 **`.env.local`**，`webapi/app.py` 启动时自动加载 |
 | 表格与 Office skills | **`requirements.txt`** 含 **openpyxl**、**python-docx**、**PyYAML**（CI/bootstrap 安装）；缺包时对应 skill 会抛出可读的 `RuntimeError` |
-| Web 下需 LLM 的技能 | **`webapi/session_engine._skill_llm_env`** 在 `run_skill` 前注入 **`_AICLI_API_BASE`**、**`_AICLI_API_KEY`**、**`_AICLI_LLM_MODEL`**（与会话当前模型设置一致）；技能内应读 `_AICLI_*`，勿依赖进程级 `OI_API_*` |
+| Web 下需 LLM 的技能 | **`webapi/session_engine._skill_llm_env`** 在 `run_skill` 前注入 **`_AICLI_API_BASE`**、**`_AICLI_API_KEY`**、**`_AICLI_LLM_MODEL`**（与会话当前供应商（模型设置）一致）；技能内应读 `_AICLI_*`，勿依赖进程级 `OI_API_*` |
 
 部署时在 `.env` / `.env.local` / systemd / K8s 等环境中设置变量；本地推荐维护 **`.env.local`**（已 `.gitignore`）。
 

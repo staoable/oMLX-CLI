@@ -24,6 +24,47 @@ function formatApiError(err) {
   return `${msg}${code}${rid}`;
 }
 
+function showToast(message, kind = "info") {
+  if (!message) return;
+  let host = document.getElementById("toastHost");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "toastHost";
+    host.className = "toast-host";
+    document.body.appendChild(host);
+  }
+  const item = document.createElement("div");
+  item.className = `toast toast--${kind}`;
+  item.textContent = String(message);
+  host.appendChild(item);
+  setTimeout(() => {
+    item.classList.add("toast--hide");
+    setTimeout(() => item.remove(), 260);
+  }, 4200);
+}
+
+function maybeBrowserNotify(title, body) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+  try {
+    new Notification(title, { body: body || "" });
+  } catch {
+    /* ignore browser notification errors */
+  }
+}
+
+function formatIsoToLocal(isoText) {
+  const s = String(isoText || "").trim();
+  if (!s) return "";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s;
+  const pad = (n) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
+}
+
 function scrollChatToBottom() {
   const wrap = el("chatScroll");
   requestAnimationFrame(() => {
@@ -337,19 +378,15 @@ function fillModelSelect(models, currentModel) {
   sel.innerHTML = "";
   let want = (currentModel || "").trim() || DEFAULT_MODEL;
   const uniq = [...new Set((models || []).filter(Boolean))];
-  if (!uniq.includes(want)) {
-    const opt = document.createElement("option");
-    opt.value = want;
-    opt.textContent = `${want}（不在服务端列表）`;
-    sel.appendChild(opt);
-  }
-  for (const id of uniq) {
-    const opt = document.createElement("option");
-    opt.value = id;
-    opt.textContent = id;
-    sel.appendChild(opt);
-  }
-  if (!sel.options.length) {
+  if (uniq.length) {
+    if (!uniq.includes(want)) want = uniq[0];
+    for (const id of uniq) {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = id;
+      sel.appendChild(opt);
+    }
+  } else {
     const opt = document.createElement("option");
     opt.value = want;
     opt.textContent = want;
@@ -358,19 +395,38 @@ function fillModelSelect(models, currentModel) {
   sel.value = want;
 }
 
-async function refreshModelDropdown() {
+async function getDefaultVendorId() {
+  try {
+    const data = await api("/api/vendors/default");
+    return (data.vendor_id || "").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function refreshModelDropdown(options = {}) {
+  const preferredModel = String(options.preferredModel || "").trim();
+  const keepCurrent = Boolean(options.keepCurrent);
   const vendorId = (el("vendorSelect")?.value || "").trim();
-  const current = el("modelSelect").value || DEFAULT_MODEL;
+  const current = keepCurrent ? (el("modelSelect").value || DEFAULT_MODEL) : "";
+  const fallback = preferredModel || current || DEFAULT_MODEL;
   if (!vendorId) {
-    fillModelSelect([], current);
+    fillModelSelect([], fallback);
     return;
   }
   try {
     const data = await fetchModelsForVendor(vendorId);
-    fillModelSelect(data.models || [], current);
+    const models = data.models || [];
+    let target = fallback;
+    if (models.length) {
+      if (!target || !models.includes(target)) {
+        target = models[0];
+      }
+    }
+    fillModelSelect(models, target);
   } catch (e) {
     console.warn(e);
-    fillModelSelect([], el("modelSelect").value || DEFAULT_MODEL);
+    fillModelSelect([], fallback);
     appendAssistantMessage(`模型列表刷新失败: ${formatApiError(e)}`, { error: true });
   }
 }
@@ -389,7 +445,7 @@ async function fillSessionVendorSelect(selectedId) {
   if (!list.length) {
     const ph = document.createElement("option");
     ph.value = "";
-    ph.textContent = "（请先在侧栏「模型设置」添加并保存）";
+    ph.textContent = "（请先在侧栏「模型设置」中添加供应商并保存）";
     sel.appendChild(ph);
     sel.value = "";
     return;
@@ -429,6 +485,8 @@ function clearVendorForm() {
   o.value = "";
   o.textContent = "（请先下载模型列表）";
   el("vendorFormDefaultModel").appendChild(o);
+  const ck = el("vendorFormDefaultVendor");
+  if (ck) ck.checked = false;
   setVendorFormHint("");
 }
 
@@ -450,12 +508,13 @@ async function renderVendorList() {
       : '<div class="obs-empty">尚未配置模型设置。请在下方创建第一条（名称、API Base、API Key 与默认模型）。</div>';
     return;
   }
+  const defaultVendorId = await getDefaultVendorId();
   for (const v of list) {
     const row = document.createElement("div");
     row.className = "vendor-row";
     const left = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = v.name || "";
+    title.textContent = (v.name || "") + (v.id === defaultVendorId ? "（默认）" : "");
     const meta = document.createElement("div");
     meta.className = "vendor-row__meta";
     meta.textContent = v.api_base || "";
@@ -502,6 +561,7 @@ async function renderVendorList() {
 
 async function loadVendorIntoForm(vendorId) {
   const v = await api(`/api/vendors/${vendorId}`);
+  const defaultVendorId = await getDefaultVendorId();
   el("vendorFormId").value = v.id;
   el("vendorFormName").value = v.name || "";
   el("vendorFormApiBase").value = v.api_base || "";
@@ -521,6 +581,8 @@ async function loadVendorIntoForm(vendorId) {
     o.textContent = "（请先下载模型列表）";
     sel.appendChild(o);
   }
+  const ck = el("vendorFormDefaultVendor");
+  if (ck) ck.checked = v.id === defaultVendorId;
   setVendorFormHint("");
 }
 
@@ -580,6 +642,7 @@ async function onVendorSaveRecordClick() {
   const apiBase = el("vendorFormApiBase").value.trim();
   const defaultModel = el("vendorFormDefaultModel").value.trim();
   const apiKey = await readVendorApiKeyTrimmed();
+  const setAsDefaultVendor = Boolean(el("vendorFormDefaultVendor")?.checked);
   if (!name || !apiBase) {
     setVendorFormHint("请填写显示名与 API Base。");
     return;
@@ -597,6 +660,12 @@ async function onVendorSaveRecordClick() {
       hintAfter = apiKey
         ? "已更新该条模型设置（含 API Key，已写入数据库）。表单已清空——继续添加请直接填写后保存；修改其它条请先在列表点「编辑」。"
         : "已更新该条模型设置（未传 Key 则数据库中原密钥不变）。表单已清空；修改其它模型设置请先在列表点「编辑」。";
+      if (setAsDefaultVendor) {
+        await api("/api/vendors/default", {
+          method: "PUT",
+          body: JSON.stringify({ vendor_id: id }),
+        });
+      }
     } else {
       const created = await api("/api/vendors", {
         method: "POST",
@@ -611,6 +680,12 @@ async function onVendorSaveRecordClick() {
       hintAfter = apiKey
         ? `已创建「${label}」（含 API Key）。表单已清空，可继续添加其它模型设置。`
         : `已创建「${label}」。补写 API Key 或修改该条请在列表点「编辑」；添加另一条请直接填写下方表单并保存。`;
+      if (setAsDefaultVendor) {
+        await api("/api/vendors/default", {
+          method: "PUT",
+          body: JSON.stringify({ vendor_id: created.id }),
+        });
+      }
     }
     await renderVendorList();
     await fillSessionVendorSelect(state.currentVendorId);
@@ -761,9 +836,15 @@ async function selectSession(sessionId) {
 }
 
 async function createSession() {
+  const defaultVendorId = await getDefaultVendorId();
   const created = await api("/api/sessions", {
     method: "POST",
-    body: JSON.stringify({ title: "新会话" }),
+    body: JSON.stringify({
+      title: "新会话",
+      vendor_id: defaultVendorId,
+      execution_enabled: true,
+      confirm_each: true,
+    }),
   });
   await loadSessions();
   await selectSession(created.id);
@@ -987,7 +1068,7 @@ async function confirmPendingCommand(approve) {
 el("newSessionBtn").onclick = createSession;
 el("saveSessionBtn").onclick = saveSessionConfig;
 el("sendBtn").onclick = sendMessage;
-el("refreshModelsBtn").onclick = refreshModelDropdown;
+el("refreshModelsBtn").onclick = () => refreshModelDropdown({ keepCurrent: true });
 el("refreshObsBtn").onclick = refreshObservability;
 el("obsExecStatusFilter").addEventListener("change", renderObservabilityPanel);
 el("sidebarToggle").onclick = toggleSidebar;
@@ -1012,6 +1093,318 @@ function closeDebugModal() {
   el("debugModal").hidden = true;
 }
 
+let claudeJobsPollTimer = null;
+let claudeJobsSelectedId = null;
+let claudeJobsBackgroundPollTimer = null;
+const claudeJobStatusSeen = new Map();
+const claudeJobAnnounced = new Set();
+const appBootAtMs = Date.now();
+
+function _claudeJobSeenKey(sessionId, jobId) {
+  return `${sessionId}::${jobId}`;
+}
+
+function _isClaudeJobTerminal(status) {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function claudeStatusLabel(status) {
+  if (status === "running") return "运行中";
+  if (status === "queued") return "排队中";
+  if (status === "completed") return "已完成";
+  if (status === "failed") return "失败";
+  if (status === "cancelled") return "已取消";
+  return status || "-";
+}
+
+function claudeStatusIcon(status) {
+  if (status === "completed") return "✓";
+  if (status === "cancelled") return "✕";
+  if (status === "failed") return "!";
+  if (status === "queued") return "…";
+  if (status === "running") return "•";
+  return "·";
+}
+
+function formatDurationMs(startIso, endIso) {
+  const s = Date.parse(String(startIso || ""));
+  const e = endIso ? Date.parse(String(endIso || "")) : Date.now();
+  if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return "-";
+  const sec = Math.floor((e - s) / 1000);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const r = sec % 60;
+  if (h > 0) return `${h}h ${m}m ${r}s`;
+  if (m > 0) return `${m}m ${r}s`;
+  return `${r}s`;
+}
+
+function _detectFailureHint(text) {
+  const s = String(text || "");
+  if (/401|unauthorized|authentication/i.test(s)) return "鉴权失败（请检查 API Key）";
+  if (/429|rate limit/i.test(s)) return "触发限流（建议稍后重试）";
+  if (/timeout|timed out/i.test(s)) return "请求超时（建议重试并缩小任务）";
+  if (/not found|enoent|no such file/i.test(s)) return "文件或路径不存在";
+  if (/traceback|exception|api error/i.test(s)) return "执行报错（查看错误卡和日志）";
+  return "";
+}
+
+function renderClaudeConversation(job, fullText) {
+  const convEl = el("claudeJobConversation");
+  if (!job) {
+    convEl.innerHTML = '<div class="obs-empty">请选择左侧任务</div>';
+    return;
+  }
+  const prompt = String(job.prompt || job.prompt_preview || "").trim() || "(该任务未记录 prompt)";
+  const output = String(fullText || "").trim();
+  const err = String(job.error_summary || "").trim();
+  const hint = _detectFailureHint(err || output);
+  let answer = output;
+  if (!answer) {
+    if (job.status === "running") {
+      answer = "任务运行中，Claude 暂未产生可显示输出（这是正常情况）。请继续等待或稍后刷新。";
+    } else if (job.status === "queued") {
+      answer = "任务已入队，正在等待前一个任务完成后自动开始。";
+    } else if (job.status === "failed") answer = err || "任务失败，但未返回详细输出。";
+    else answer = String(job.result_summary || "").trim() || "任务已结束，但暂无输出。";
+  }
+  const answerTitle = job.status === "failed" ? "Claude（报错）" : "Claude（回答）";
+  const endIso = job.status === "running" || job.status === "queued" ? "" : job.updated_at;
+  const meta = `${claudeStatusLabel(job.status)} · ${formatIsoToLocal(job.updated_at)} · 耗时 ${formatDurationMs(job.created_at, endIso)}`;
+  convEl.innerHTML = `
+    <div class="claude-msg claude-msg--user">
+      <div class="claude-msg__role">你</div>
+      <div class="claude-msg__body markdown-body">${renderMarkdown(prompt)}</div>
+    </div>
+    <div class="claude-msg claude-msg--assistant${job.status === "failed" ? " claude-msg--error" : ""}">
+      <div class="claude-msg__role">${escapeHtml(answerTitle)}</div>
+      <div class="claude-msg__meta">${escapeHtml(meta)}</div>
+      ${hint ? `<div class="claude-msg__hint">${escapeHtml(hint)}</div>` : ""}
+      <div class="claude-msg__body markdown-body">${renderMarkdown(answer)}</div>
+    </div>
+  `;
+  enhanceCodeBlocks(convEl);
+}
+
+async function announceClaudeJobTransition(sessionId, jobId, status) {
+  if (sessionId !== state.currentSessionId) return;
+  const key = _claudeJobSeenKey(sessionId, jobId);
+  if (claudeJobAnnounced.has(key)) return;
+  claudeJobAnnounced.add(key);
+  try {
+    const d = await api(
+      `/api/sessions/${encodeURIComponent(sessionId)}/claude-jobs/${encodeURIComponent(jobId)}`
+    );
+    const job = d.job || {};
+    let fullLogText = "";
+    try {
+      const lg = await api(
+        `/api/sessions/${encodeURIComponent(sessionId)}/claude-jobs/${encodeURIComponent(jobId)}/logs?tail=5000`
+      );
+      fullLogText = String(lg?.text || "");
+    } catch {
+      /* ignore logs fetch error and fallback to summary */
+    }
+    const exitCode = job.exit_code;
+    const summary = String(job.result_summary || "").trim();
+    const report = (fullLogText || summary || "").trim();
+    const err = String(job.error_summary || "").trim();
+    let text = "";
+    if (status === "completed") {
+      text = `Claude 任务 ${jobId.slice(0, 8)}… 已完成（exit_code=${exitCode ?? 0}）。`;
+      if (report) {
+        text += `\n完整报告：\n${report}`;
+      }
+    } else if (status === "failed") {
+      text = `Claude 任务 ${jobId.slice(0, 8)}… 执行失败（exit_code=${exitCode ?? "-"})。`;
+      if (err) {
+        text += `\n错误摘要：${err}`;
+      }
+      if (report) {
+        text += `\n完整报告：\n${report}`;
+      }
+    } else {
+      text = `Claude 任务 ${jobId.slice(0, 8)}… 已取消。`;
+      if (err) {
+        text += `\n原因：${err}`;
+      }
+      if (report) {
+        text += `\n任务输出：\n${report}`;
+      }
+    }
+    text += `\n如需完整输出，可查看「Claude 任务」面板或调用 claude_job_logs('${jobId}', tail_lines=200)。`;
+    appendAssistantMessage(text, { error: status === "failed" });
+  } catch (e) {
+    appendAssistantMessage(
+      `Claude 任务 ${jobId.slice(0, 8)}… 状态变更为 ${status}，但读取详情失败：${formatApiError(e)}`,
+      { error: true }
+    );
+  }
+}
+
+async function _syncClaudeJobTransitions(sessionId, jobs) {
+  const list = Array.isArray(jobs) ? jobs : [];
+  for (const j of list) {
+    const key = _claudeJobSeenKey(sessionId, j.id);
+    const prev = claudeJobStatusSeen.get(key);
+    const now = j.status;
+    claudeJobStatusSeen.set(key, now);
+    const alreadyAnnounced = claudeJobAnnounced.has(key);
+    const updatedAtMs = Date.parse(String(j.updated_at || ""));
+    const createdAtMs = Date.parse(String(j.created_at || ""));
+    const isCreatedAfterBoot = Number.isFinite(createdAtMs) && createdAtMs >= appBootAtMs;
+    const isRecentTerminalUpdate =
+      Number.isFinite(updatedAtMs) && updatedAtMs >= Date.now() - 5 * 60 * 1000;
+    const shouldAnnounce =
+      _isClaudeJobTerminal(now) &&
+      !alreadyAnnounced &&
+      (
+        // 常规：明确经历 running -> 终态。
+        prev === "running" ||
+        // 兜底：页面打开后新建任务，首次看到即终态（常见于任务很快完成）。
+        (prev == null && isCreatedAfterBoot) ||
+        // 兜底：非常近期终态更新，避免漏报（例如后台轮询节奏与状态更新交错）。
+        isRecentTerminalUpdate
+      );
+    if (shouldAnnounce) {
+      const label = now === "completed" ? "已完成" : now === "failed" ? "失败" : "已取消";
+      const msg = `Claude 任务 ${j.id.slice(0, 8)}… ${label}`;
+      showToast(msg, now === "completed" ? "success" : now === "failed" ? "error" : "info");
+      maybeBrowserNotify("Claude 任务状态更新", msg);
+      await announceClaudeJobTransition(sessionId, j.id, now);
+    }
+  }
+}
+
+async function refreshClaudeJobsStatusOnly() {
+  const sid = state.currentSessionId;
+  if (!sid) return;
+  try {
+    const data = await api(`/api/sessions/${encodeURIComponent(sid)}/claude-jobs?limit=40`);
+    if (!data.enabled) return;
+    await _syncClaudeJobTransitions(sid, data.jobs || []);
+  } catch {
+    /* keep silent for background polling */
+  }
+}
+
+function closeClaudeJobsModal() {
+  el("claudeJobsModal").hidden = true;
+  if (claudeJobsPollTimer) {
+    clearInterval(claudeJobsPollTimer);
+    claudeJobsPollTimer = null;
+  }
+}
+
+function startClaudeJobsPolling() {
+  if (claudeJobsPollTimer) clearInterval(claudeJobsPollTimer);
+  claudeJobsPollTimer = setInterval(() => {
+    refreshClaudeJobsUi();
+  }, 3200);
+}
+
+function startClaudeJobsBackgroundPolling() {
+  if (claudeJobsBackgroundPollTimer) clearInterval(claudeJobsBackgroundPollTimer);
+  claudeJobsBackgroundPollTimer = setInterval(() => {
+    // 弹窗打开时已有高频轮询，避免重复请求。
+    if (!el("claudeJobsModal").hidden) return;
+    refreshClaudeJobsStatusOnly();
+  }, 10000);
+}
+
+async function loadClaudeJobDetail(sid, jobId) {
+  const cancelBtn = el("cancelClaudeJobBtn");
+  try {
+    const d = await api(`/api/sessions/${encodeURIComponent(sid)}/claude-jobs/${encodeURIComponent(jobId)}`);
+    const job = d.job;
+    const tail = await api(
+      `/api/sessions/${encodeURIComponent(sid)}/claude-jobs/${encodeURIComponent(jobId)}/logs?tail=5000`
+    );
+    renderClaudeConversation(job, String(tail.text || ""));
+    cancelBtn.disabled = job.status !== "running";
+  } catch (e) {
+    el("claudeJobConversation").innerHTML = `<div class="obs-empty">读取任务详情失败：${escapeHtml(formatApiError(e))}</div>`;
+    cancelBtn.disabled = true;
+  }
+}
+
+async function refreshClaudeJobsUi() {
+  const sid = state.currentSessionId;
+  const listEl = el("claudeJobsList");
+  const cancelBtn = el("cancelClaudeJobBtn");
+  if (!sid) {
+    listEl.innerHTML = '<div class="obs-empty">请选择会话</div>';
+    renderClaudeConversation(null, "");
+    cancelBtn.disabled = true;
+    return;
+  }
+  try {
+    const data = await api(`/api/sessions/${encodeURIComponent(sid)}/claude-jobs?limit=40`);
+    if (!data.enabled) {
+      listEl.innerHTML = `<div class="obs-empty">${escapeHtml(data.reason || "Claude Code Job 未启用")}<br/><span style="color:var(--text-muted)">参见 docs/CLAUDE_CODE_JOB_SPEC.md 与 .env.example</span></div>`;
+      renderClaudeConversation(null, "");
+      cancelBtn.disabled = true;
+      return;
+    }
+    const jobs = data.jobs || [];
+    await _syncClaudeJobTransitions(sid, jobs);
+    const queueOrder = new Map();
+    const queuedAsc = jobs
+      .filter((j) => String(j.status || "").toLowerCase() === "queued")
+      .sort((a, b) => Date.parse(String(a.created_at || "")) - Date.parse(String(b.created_at || "")));
+    queuedAsc.forEach((j, idx) => queueOrder.set(j.id, idx + 1));
+    if (!jobs.length) {
+      listEl.innerHTML = '<div class="obs-empty">暂无任务；在对话中让模型调用 claude_job_start</div>';
+      claudeJobsSelectedId = null;
+      renderClaudeConversation(null, "");
+      cancelBtn.disabled = true;
+      return;
+    }
+    if (claudeJobsSelectedId && !jobs.some((j) => j.id === claudeJobsSelectedId)) {
+      claudeJobsSelectedId = jobs[0].id;
+    }
+    if (!claudeJobsSelectedId) {
+      claudeJobsSelectedId = jobs[0].id;
+    }
+    listEl.innerHTML = "";
+    for (const j of jobs) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className =
+        "claude-jobs-row" + (j.id === claudeJobsSelectedId ? " claude-jobs-row--active" : "");
+      const statusLower = String(j.status || "").toLowerCase();
+      const statusClass = `claude-jobs-status-icon claude-jobs-status-icon--${statusLower}`;
+      const duration = formatDurationMs(j.created_at, j.updated_at);
+      const failHint = j.status === "failed" ? _detectFailureHint(j.error_summary || "") : "";
+      const queueBadge =
+        statusLower === "queued" ? `<span class="claude-jobs-row__queue">排队 #${queueOrder.get(j.id) || 1}</span>` : "";
+      b.innerHTML = `
+        <div class="claude-jobs-row__line1">
+          <div class="claude-jobs-row__status">
+            <span class="${statusClass}" title="${escapeHtml(claudeStatusLabel(j.status))}" aria-label="${escapeHtml(claudeStatusLabel(j.status))}">${escapeHtml(claudeStatusIcon(j.status))}</span>
+            <span class="claude-jobs-row__jobid">${escapeHtml(j.id.slice(0, 12))}…</span>
+            ${queueBadge}
+          </div>
+          <div class="claude-jobs-row__time">${escapeHtml(formatIsoToLocal(j.updated_at) || "-")}</div>
+        </div>
+        <div class="claude-jobs-row__line2">
+          <div class="claude-jobs-row__preview">${escapeHtml(j.prompt_preview || "(无提示词预览)")}</div>
+          <div class="claude-jobs-row__extra">耗时 ${escapeHtml(duration)}${failHint ? ` · ${escapeHtml(failHint)}` : ""}</div>
+        </div>
+      `;
+      b.addEventListener("click", () => {
+        claudeJobsSelectedId = j.id;
+        refreshClaudeJobsUi();
+      });
+      listEl.appendChild(b);
+    }
+    await loadClaudeJobDetail(sid, claudeJobsSelectedId);
+  } catch (e) {
+    listEl.innerHTML = `<div class="obs-empty">加载失败：${escapeHtml(formatApiError(e))}</div>`;
+    cancelBtn.disabled = true;
+  }
+}
+
 el("settingsModal").addEventListener("click", (e) => {
   const node = e.target.closest("[data-close-modal]");
   if (node && node.getAttribute("data-close-modal") === "settings") closeSettingsModal();
@@ -1030,6 +1423,30 @@ el("debugModal").addEventListener("click", (e) => {
   const node = e.target.closest("[data-close-modal]");
   if (node && node.getAttribute("data-close-modal") === "debug") closeDebugModal();
 });
+el("claudeJobsModal").addEventListener("click", (e) => {
+  const node = e.target.closest("[data-close-modal]");
+  if (node && node.getAttribute("data-close-modal") === "claude-jobs") closeClaudeJobsModal();
+});
+el("openClaudeJobsModalBtn").addEventListener("click", async () => {
+  el("claudeJobsModal").hidden = false;
+  await refreshClaudeJobsUi();
+  startClaudeJobsPolling();
+});
+el("refreshClaudeJobsBtn").addEventListener("click", () => refreshClaudeJobsUi());
+el("cancelClaudeJobBtn").addEventListener("click", async () => {
+  const sid = state.currentSessionId;
+  const jid = claudeJobsSelectedId;
+  if (!sid || !jid) return;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(sid)}/claude-jobs/${encodeURIComponent(jid)}/cancel`, {
+      method: "POST",
+      body: "{}",
+    });
+    await refreshClaudeJobsUi();
+  } catch (e) {
+    el("claudeJobConversation").innerHTML = `<div class="obs-empty">取消任务失败：${escapeHtml(formatApiError(e))}</div>`;
+  }
+});
 el("openSettingsModalBtn").addEventListener("click", async () => {
   await fillSessionVendorSelect(state.currentVendorId);
   try {
@@ -1045,16 +1462,13 @@ el("vendorSelect")?.addEventListener("change", async () => {
   const id = (el("vendorSelect").value || "").trim();
   if (!id) {
     state.effectiveApiBase = state.sessionApiBaseFromServer || "";
-    await refreshModelDropdown();
+    await refreshModelDropdown({ keepCurrent: true });
     return;
   }
   try {
     const v = await api(`/api/vendors/${id}`);
     state.effectiveApiBase = v.api_base || "";
-    if ((v.default_model || "").trim()) {
-      fillModelSelect([], v.default_model.trim());
-    }
-    await refreshModelDropdown();
+    await refreshModelDropdown({ preferredModel: (v.default_model || "").trim(), keepCurrent: false });
   } catch (e) {
     appendAssistantMessage(`加载模型设置失败: ${formatApiError(e)}`, { error: true });
   }
@@ -1068,6 +1482,11 @@ document.addEventListener("keydown", (e) => {
   if (!el("confirmModal").hidden) {
     e.preventDefault();
     confirmPendingCommand(false);
+    return;
+  }
+  if (!el("claudeJobsModal").hidden) {
+    e.preventDefault();
+    closeClaudeJobsModal();
     return;
   }
   if (!el("debugModal").hidden) {
@@ -1136,3 +1555,4 @@ if (archivedToggle) {
   });
 }
 loadSessions();
+startClaudeJobsBackgroundPolling();

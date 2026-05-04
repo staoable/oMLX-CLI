@@ -59,9 +59,11 @@ class SessionStore:
     def _conn(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
         try:
             yield conn
-        except BaseException:
+        except Exception:
             conn.rollback()
             raise
         else:
@@ -71,6 +73,8 @@ class SessionStore:
 
     def _init_db(self) -> None:
         with self._conn() as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -161,6 +165,11 @@ class SessionStore:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
                 );
+
+                CREATE TABLE IF NOT EXISTS app_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL DEFAULT ''
+                );
                 """
             )
             self._migrate_sessions(conn)
@@ -168,6 +177,41 @@ class SessionStore:
             self._migrate_executions(conn)
             self._migrate_contexts(conn)
             self._migrate_vendors(conn)
+            self._migrate_claude_jobs(conn)
+
+    def _migrate_claude_jobs(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS claude_jobs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                workspace_path TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                context_mode TEXT NOT NULL DEFAULT 'continue',
+                max_turns INTEGER,
+                status TEXT NOT NULL,
+                pid INTEGER,
+                exit_code INTEGER,
+                error_summary TEXT NOT NULL DEFAULT '',
+                log_relpath TEXT NOT NULL,
+                result_summary TEXT NOT NULL DEFAULT '',
+                claude_session_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(claude_jobs)").fetchall()}
+        if cols and "claude_session_id" not in cols:
+            conn.execute("ALTER TABLE claude_jobs ADD COLUMN claude_session_id TEXT NOT NULL DEFAULT ''")
+        if cols and "context_mode" not in cols:
+            conn.execute("ALTER TABLE claude_jobs ADD COLUMN context_mode TEXT NOT NULL DEFAULT 'continue'")
+        if cols and "max_turns" not in cols:
+            conn.execute("ALTER TABLE claude_jobs ADD COLUMN max_turns INTEGER")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_claude_jobs_session ON claude_jobs(session_id, created_at DESC)"
+        )
 
     def _migrate_sessions(self, conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
@@ -860,6 +904,10 @@ class SessionStore:
             cur = conn.execute("DELETE FROM vendors WHERE id = ?", (vendor_id,))
             if cur.rowcount == 0:
                 raise KeyError(f"Vendor not found: {vendor_id}")
+            conn.execute(
+                "DELETE FROM app_meta WHERE key = 'default_vendor_id' AND value = ?",
+                (vendor_id,),
+            )
 
     def count_sessions_for_vendor(self, vendor_id: str) -> int:
         with self._conn() as conn:
@@ -868,6 +916,40 @@ class SessionStore:
                 (vendor_id,),
             ).fetchone()
         return int(row["c"]) if row else 0
+
+    def get_default_vendor_id(self) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT value FROM app_meta WHERE key = 'default_vendor_id'"
+            ).fetchone()
+        if row is None:
+            return None
+        vid = str(row["value"] or "").strip()
+        if not vid:
+            return None
+        try:
+            self.get_vendor(vid)
+        except KeyError:
+            return None
+        return vid
+
+    def set_default_vendor_id(self, vendor_id: str | None) -> str | None:
+        vid = (vendor_id or "").strip() or None
+        with self._conn() as conn:
+            if vid is None:
+                conn.execute("DELETE FROM app_meta WHERE key = 'default_vendor_id'")
+                return None
+            row = conn.execute("SELECT id FROM vendors WHERE id = ?", (vid,)).fetchone()
+            if row is None:
+                raise KeyError(f"Vendor not found: {vid}")
+            conn.execute(
+                """
+                INSERT INTO app_meta(key, value) VALUES('default_vendor_id', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (vid,),
+            )
+            return vid
 
     @staticmethod
     def _validate_vendor_slug(slug: str) -> None:
@@ -936,6 +1018,149 @@ class SessionStore:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
+
+    def create_claude_job(
+        self,
+        *,
+        job_id: str,
+        session_id: str,
+        workspace_path: str,
+        prompt: str,
+        context_mode: str = "continue",
+        max_turns: int | None = None,
+        status: str,
+        pid: int | None,
+        log_relpath: str,
+        error_summary: str = "",
+        claude_session_id: str = "",
+    ) -> dict[str, Any]:
+        now = _now_iso()
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO claude_jobs (
+                    id, session_id, workspace_path, prompt, context_mode, max_turns, status, pid, exit_code,
+                    error_summary, log_relpath, result_summary, claude_session_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    session_id,
+                    workspace_path,
+                    prompt,
+                    (context_mode or "continue").strip().lower(),
+                    int(max_turns) if max_turns is not None else None,
+                    status,
+                    pid,
+                    None,
+                    error_summary,
+                    log_relpath,
+                    claude_session_id,
+                    now,
+                    now,
+                ),
+            )
+        return self.get_claude_job(job_id)
+
+    def update_claude_job(
+        self,
+        job_id: str,
+        *,
+        status: str | None = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
+        error_summary: str | None = None,
+        result_summary: str | None = None,
+        claude_session_id: str | None = None,
+    ) -> None:
+        fields: list[str] = []
+        vals: list[Any] = []
+        if status is not None:
+            fields.append("status = ?")
+            vals.append(status)
+        if pid is not None:
+            fields.append("pid = ?")
+            vals.append(pid)
+        if exit_code is not None:
+            fields.append("exit_code = ?")
+            vals.append(exit_code)
+        if error_summary is not None:
+            fields.append("error_summary = ?")
+            vals.append(error_summary)
+        if result_summary is not None:
+            fields.append("result_summary = ?")
+            vals.append(result_summary)
+        if claude_session_id is not None:
+            fields.append("claude_session_id = ?")
+            vals.append(claude_session_id)
+        if not fields:
+            return
+        now = _now_iso()
+        fields.append("updated_at = ?")
+        vals.append(now)
+        vals.append(job_id)
+        with self._conn() as conn:
+            conn.execute(
+                f"UPDATE claude_jobs SET {', '.join(fields)} WHERE id = ?",
+                vals,
+            )
+
+    def get_claude_job(self, job_id: str) -> dict[str, Any]:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM claude_jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise KeyError(job_id)
+        return self._row_to_claude_job(row)
+
+    def list_claude_jobs(self, session_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        lim = max(1, min(int(limit), 200))
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM claude_jobs
+                WHERE session_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (session_id, lim),
+            ).fetchall()
+        return [self._row_to_claude_job(r) for r in rows]
+
+    def latest_claude_session_id(self, session_id: str) -> str:
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT claude_session_id
+                FROM claude_jobs
+                WHERE session_id = ? AND claude_session_id != ''
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return ""
+        return str(row["claude_session_id"] or "")
+
+    @staticmethod
+    def _row_to_claude_job(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "workspace_path": row["workspace_path"],
+            "prompt": row["prompt"],
+            "context_mode": row["context_mode"] if "context_mode" in row.keys() else "continue",
+            "max_turns": row["max_turns"] if "max_turns" in row.keys() else None,
+            "status": row["status"],
+            "pid": row["pid"],
+            "exit_code": row["exit_code"],
+            "error_summary": row["error_summary"] or "",
+            "log_relpath": row["log_relpath"],
+            "result_summary": row["result_summary"] or "",
+            "claude_session_id": row["claude_session_id"] if "claude_session_id" in row.keys() else "",
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
 
     @staticmethod
     def _row_to_session(row: sqlite3.Row) -> SessionRecord:
