@@ -41,6 +41,14 @@
 | `pdf_search` | 在 PDF 文字层中搜索关键词并返回页码与上下文 | `.omlxcli/skills/pdf.py` |
 | `pdf_to_text` | 仅提取 PDF 文字层、不 OCR | `.omlxcli/skills/pdf.py` |
 | `repo_grep` | 目录内 ripgrep/回退扫描，返回匹配文件路径列表 | `.omlxcli/skills/repo_search.py` |
+| `stock_quote` | A 股多只股票实时行情（最新价/涨跌幅/开盘价） | `.omlxcli/skills/stock_market.py` |
+| `stock_hot_list` | A 股热股榜/飙升榜（东方财富） | `.omlxcli/skills/stock_market.py` |
+| `stock_unusual` | A 股盘口异动（东方财富） | `.omlxcli/skills/stock_market.py` |
+| `stock_search` | A 股代码/名称检索（东方财富） | `.omlxcli/skills/stock_market.py` |
+| `stock_brief` | A 股单票聚合视图（行情+热榜+异动） | `.omlxcli/skills/stock_market.py` |
+| `stock_kline` | 股票/指数/基金历史 K 线（分钟/日周月） | `.omlxcli/skills/stock_market.py` |
+| `stock_history_trades` | 当日分时成交明细（最近 N 笔） | `.omlxcli/skills/stock_market.py` |
+| `stock_kline_summary` | 历史 K 线统计摘要（涨跌/振幅/均线趋势） | `.omlxcli/skills/stock_market.py` |
 | `video_summarize` | 抽关键帧与音轨转写后送 LLM 做视频摘要 | `.omlxcli/skills/video.py` |
 | `vision_compare` | 多图对比/汇总（多模态模型） | `.omlxcli/skills/vision.py` |
 | `vision_describe` | 单图描述或问答（多模态模型） | `.omlxcli/skills/vision.py` |
@@ -135,6 +143,7 @@ CI 与本地全量测试包含 **Playwright** 对 `/ui/` 的静态冒烟（见 `
 | 变量 | 作用 |
 |------|------|
 | **`OMLXCLI_SMOKE_NETWORK=1`** | 打开 **weather_***、**web_read** 等外网冒烟分支。 |
+| **`OMLXCLI_SMOKE_STOCK=1`** | 打开 **stock_*** 冒烟分支（默认关闭，避免东财风控导致误报）。 |
 | **`OMLXCLI_SMOKE_PDF_PATH`** 等 | **`OMLXCLI_SMOKE_IMAGE_PATH`**、**`OMLXCLI_SMOKE_AUDIO_PATH`**、**`OMLXCLI_SMOKE_VIDEO_PATH`**：本机样例**绝对路径**；不设则对应技能 **SKIP**。 |
 | **`OMLXCLI_SEARCH_GATEWAY_*` / `OMLXCLI_SEARXNG_URL`** | **web_search** 需要（见 **`.env.example` 第五节**）；与 **`OMLXCLI_SMOKE_NETWORK=1`** 同开。 |
 | **`OMLXCLI_EVAL_SKIP_HTTP`** | 测 **web_read** 时请**勿**设为 `1/true`（否则脚本 **SKIP**）；与 CI 单测跳过外网语义一致。 |

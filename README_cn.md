@@ -89,7 +89,7 @@
 | **安全** | 命令黑名单、高危操作确认弹窗、工作区写路径边界检查。 |
 | **上下文** | 分层：`pinned` / `working` / `archived`；checkpoint（追加/替换）；预算裁剪与自动摘要；上下文注入审计。 |
 | **可观测** | 结构化 JSON 日志（见 `LOGGING_SPEC.md`）、`x-request-id`、执行与注入相关 REST 接口。 |
-| **Skills** | PDF、天气、网页、笔记、`repo_grep`、视觉、音视频；**CSV/TSV 摘要**、**xlsx 抽样**、**只读 git**、**JSON/YAML 点路径**、**docx 抽文本**（依赖见 `requirements.txt` 中 **openpyxl / PyYAML / python-docx**）；**Apple Silicon** 上可选 **mlx-whisper** 本地转写。 |
+| **Skills** | PDF、天气、网页、笔记、`repo_grep`、视觉、音视频；**CSV/TSV 摘要**、**xlsx 抽样**、**只读 git**、**JSON/YAML 点路径**、**docx 抽文本**、**股票行情/历史数据**（`stock_quote`、`stock_kline` 等，内置东财风控自愈与新浪兜底）；**Apple Silicon** 上可选 **mlx-whisper** 本地转写。 |
 
 ---
 
@@ -133,7 +133,7 @@ AUTO_INSTALL_SYSTEM_DEPS=0 AUTO_INSTALL_PLAYWRIGHT_CHROMIUM=0 ./bootstrap.sh
 - **模板**：根目录 **`.env.example`**，推荐复制为 **`.env.local`**（已在 `.gitignore`，勿提交密钥）。
 - **加载**：`import webapi.app` 时由 `webapi/dotenv_loader.py` 读取 `.env` 与 **`.env.local`**；**已在进程环境中的变量不会被文件覆盖**。`./start_web.sh` 也会 `source` 上述文件。
 - **供应商（模型设置，Web）**：在界面至少添加一条；**`api_base` / `api_key` / 默认模型** 在 **`sessions.db` 的 `vendors` 表**；会话在设置中绑定后才能对话与使用依赖 LLM 的 Skills。**不要**再在 `.env.local` 里配 `OI_API_BASE` / `OI_API_KEY` 作为 Web 上游（模板已移除；若本地仍有旧键可删掉以免混淆）。
-- **`.env.local` 常用项**：`OMLXCLI_DATA_DIR`、`OMLXCLI_DEFAULT_WORKSPACE`、`OMLXCLI_RUN_SKILL_TIMEOUT_SEC`、`OMLXCLI_CHAT_*`、`OMLXCLI_SEARCH_*` / `OMLXCLI_SEARXNG_URL` 等。新建会话默认 model、旧占位名回退由代码 **`DEFAULT_SESSION_MODEL_ID`** 与已绑定供应商（模型设置）的 **`default_model`** 决定，**无需** `OI_MODEL`。逐项说明见 **`.env.example`**。
+- **`.env.local` 常用项**：`OMLXCLI_DATA_DIR`、`OMLXCLI_DEFAULT_WORKSPACE`、`OMLXCLI_RUN_SKILL_TIMEOUT_SEC`、`OMLXCLI_CHAT_*`、`OMLXCLI_SEARCH_*` / `OMLXCLI_SEARXNG_URL` 等。若股票行情 skills（`stock_quote` / `stock_brief`）遇到东财 `push2.eastmoney.com` 断连（`RemoteDisconnected`），可配置 `OMLXCLI_STOCK_EASTMONEY_PROXY`（优先）或 `OMLXCLI_STOCK_PROXY`；自动解封逻辑已内置（检测到封控后调用仓库内置脚本），无需额外环境变量。新建会话默认 model、旧占位名回退由代码 **`DEFAULT_SESSION_MODEL_ID`** 与已绑定供应商（模型设置）的 **`default_model`** 决定，**无需** `OI_MODEL`。逐项说明见 **`.env.example`**。
 - **上线加固建议务必配置**：
   - CORS：`OMLXCLI_CORS_ORIGINS`（默认本机 `8788`；跨域访问 UI 时必须显式列出浏览器来源）
   - 限流：`OMLXCLI_MSG_RATE_LIMIT_COUNT`、`OMLXCLI_MSG_RATE_LIMIT_WINDOW_SEC`
@@ -205,7 +205,7 @@ oMLX-CLI/
 | 命令 | 作用 |
 |------|------|
 | `./scripts/dev_check.sh` | `gen_oi_tool_map.py --check` + 全量 `unittest`（与 CI 主体对齐）。 |
-| `python3 scripts/smoke_all_skills.py` | 可选：对 manifest 全技能冒烟；变量见 **`.env.example`「九·1」** 与 **`Skills_README.md`** §8.1。 |
+| `python3 scripts/smoke_all_skills.py` | 可选：对 manifest 全技能冒烟；变量见 **`.env.example`「九·1」** 与 **`Skills_README.md`** §8.1（股票技能需额外 `OMLXCLI_SMOKE_STOCK=1`）。 |
 | `./.venv/bin/python -m playwright install chromium` | 首次跑 E2E 前安装 Chromium。 |
 
 GitHub Actions（`.github/workflows/ci.yml`）：安装依赖与 Playwright Chromium，执行 `gen_oi_tool_map --check`、含 Playwright 的 `unittest`、以及拉起 `uvicorn` 后的 `scripts/smoke_http.py`。单测默认 `OMLXCLI_EVAL_SKIP_HTTP=1`，跳过依赖外网的评测场景。

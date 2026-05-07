@@ -131,6 +131,54 @@
       "invoke": "run_skill"
     },
     {
+      "name": "stock_brief",
+      "source_file": "stock_market.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "stock_history_trades",
+      "source_file": "stock_market.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "stock_hot_list",
+      "source_file": "stock_market.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "stock_kline",
+      "source_file": "stock_market.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "stock_kline_summary",
+      "source_file": "stock_market.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "stock_quote",
+      "source_file": "stock_market.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "stock_search",
+      "source_file": "stock_market.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
+      "name": "stock_unusual",
+      "source_file": "stock_market.py",
+      "web_status": "implemented",
+      "invoke": "run_skill"
+    },
+    {
       "name": "structured_pick",
       "source_file": "structured_data.py",
       "web_status": "implemented",

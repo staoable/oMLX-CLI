@@ -56,6 +56,62 @@
       "min_positional_args": 1,
       "max_total_args": 6
     },
+    "stock_quote": {
+      "version": "1.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 1,
+      "max_total_args": 10,
+      "changelog": "A 股实时行情（东方财富）"
+    },
+    "stock_hot_list": {
+      "version": "1.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 0,
+      "max_total_args": 8,
+      "changelog": "A 股热榜/飙升榜（东方财富）"
+    },
+    "stock_unusual": {
+      "version": "1.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 0,
+      "max_total_args": 6,
+      "changelog": "A 股盘口异动（东方财富）"
+    },
+    "stock_search": {
+      "version": "1.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 1,
+      "max_total_args": 6,
+      "changelog": "A 股代码/名称检索（东方财富）"
+    },
+    "stock_brief": {
+      "version": "1.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 1,
+      "max_total_args": 10,
+      "changelog": "A 股单票聚合视图（行情+热榜+异动）"
+    },
+    "stock_kline": {
+      "version": "1.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 1,
+      "max_total_args": 10,
+      "changelog": "历史 K 线（支持分钟/日周月）"
+    },
+    "stock_history_trades": {
+      "version": "1.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 1,
+      "max_total_args": 8,
+      "changelog": "当日分时成交明细"
+    },
+    "stock_kline_summary": {
+      "version": "1.0.0",
+      "permissions": ["network"],
+      "min_positional_args": 1,
+      "max_total_args": 10,
+      "changelog": "历史 K 线统计摘要"
+    },
     "note_save": {
       "version": "1.0.0",
       "permissions": ["filesystem_write"],

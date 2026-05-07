@@ -8,7 +8,10 @@
 
 - **Claude Code Job**：官方 **`claude -p`** 后台任务（**`claude_job_start` / `status` / `logs` / `cancel`**，**`.omlxcli/skills/claude_job_skill.py`**）；SQLite **`claude_jobs`**；REST **`/api/claude-code/status`**、**`/api/sessions/{id}/claude-jobs`** 等；Web **「Claude」**只读轮询；**`skill_context` + `run_skill` 线程内 ContextVar 传播**；配置见 **`.env.example` 第十一节**；规格 **`docs/CLAUDE_CODE_JOB_SPEC.md`**；单测 **`tests/test_claude_job_store.py`**；冒烟脚本 **SKIP** **`claude_job_*`**。
 - **Skills**：**`csv_tsv_summary`**（CSV/TSV 摘要）、**`xlsx_sample`**（xlsx 只读抽样）、**`git_snapshot`**（`git log` / `diff` / `show` 只读）、**`structured_pick`**（JSON/YAML 点路径取值）、**`docx_to_text`**（.docx 抽文本）；源码见 **`.omlxcli/skills/spreadsheet.py`**、**`structured_data.py`**、**`git_readonly.py`**、**`docx_read.py`**；单测 **`tests/test_workspace_skills.py`**。
+- **股票 Skills**：新增 **`stock_quote`**、**`stock_hot_list`**、**`stock_unusual`**、**`stock_search`**、**`stock_brief`**、**`stock_kline`**、**`stock_history_trades`**、**`stock_kline_summary`**（源码：**`.omlxcli/skills/stock_market.py`**）；支持中文名称解析、指数/基金分流、K 线与分时历史查询。
+- **风控自愈**：东财请求链路新增封控检测（`checkuser`）与内置自动解封脚本（**`.omlxcli/skills/_eastmoney_unblock/`**：`pass.js` + `gen_track.py` + `get_trace.py`），并保留新浪行情兜底。
 - **依赖**：根 **`requirements.txt`** 增加 **openpyxl**、**python-docx**、**PyYAML**（与 CI / `bootstrap` 一致安装）。
+- **依赖扩展**：为东财自动解封补充 **`opencv-python`**、**`numpy`**、**`requests`**、**`Pillow`**；`start_web.sh` 增加首次启动缺依赖自动安装与校验。
 - **可靠性与安全加固（2026-05-04）**：
   - `claude_job_start` 返回主聊天固定提示模板（稳定输出 `job_id`、状态、下一步查询命令）。
   - Claude Job 默认注入结构化报告模板（`OMLXCLI_CLAUDE_JOB_STRICT_REPORT`）并新增后台回收线程（`OMLXCLI_CLAUDE_JOB_REAPER_INTERVAL_SEC`）自动纠正僵尸 `running`。
@@ -20,6 +23,7 @@
 ### 文档
 
 - **`Skills_README.md`** §8.1、**`.env.example`「九·1」**、**`scripts/smoke_all_skills.py`** 头注释、**`README_cn.md` / `README_en.md`** 命令表：全技能冒烟变量与 **`OMLXCLI_EVAL_SKIP_HTTP`** / **`web_read`** 关系；**vision_*** / **audio_transcribe** / **video_summarize** 在无 **`_AICLI_API_BASE`** 时 **SKIP**（非 FAIL）；**`OI_CAPABILITY_MATRIX.md`**、**`IMPLEMENTATION_PLAN.md`** 与 skills 条目已对齐。
+- **股票文档同步**：`README_cn.md`/`README.md` 功能描述加入股票 skills；`.env.example` 与 `.env.local` 增加股票冒烟开关 **`OMLXCLI_SMOKE_STOCK`**；`scripts/smoke_all_skills.py` 增加 `stock_*` 冒烟表达式（默认需显式开启）。
 - **`docs/CLAUDE_CODE_JOB_SPEC.md`**：Claude Code Job（官方 CLI、macOS 优先）草案——**仅 `run_skill` 发起**、**UI 只读监控**、日志 **HTTP 轮询 + tail**。
 - 版本与术语收口：`README.md` / `README_en.md` / `README_cn.md` 版本徽章统一为 `0.2.1`；补充生产配置项（限流、体积限制、缓存 TTL、Claude reaper）；`docs/API.md` 修复重复章节编号并补充 `429/413` 约定。
 

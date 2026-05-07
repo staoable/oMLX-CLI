@@ -48,10 +48,38 @@ if [[ -z "${PY_CMD}" ]]; then
   exit 1
 fi
 
-if ! "${PY_CMD}" -c "import fastapi,uvicorn,pydantic" >/dev/null 2>&1; then
-  echo "Python 环境缺少依赖（fastapi/uvicorn/pydantic）。"
-  echo "请先执行: ./bootstrap.sh"
-  exit 1
-fi
+ensure_python_deps() {
+  local missing_core=0
+  local missing_unblock=0
+  if ! "${PY_CMD}" -c "import fastapi,uvicorn,pydantic" >/dev/null 2>&1; then
+    missing_core=1
+  fi
+  if ! "${PY_CMD}" -c "import cv2,numpy,requests,PIL" >/dev/null 2>&1; then
+    missing_unblock=1
+  fi
+  if [[ "${missing_core}" -eq 0 && "${missing_unblock}" -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "检测到 Python 依赖缺失，尝试自动安装..."
+  if ! "${PY_CMD}" -m pip --version >/dev/null 2>&1; then
+    echo "当前 Python 无可用 pip，请先执行 ./bootstrap.sh"
+    exit 1
+  fi
+  "${PY_CMD}" -m pip install --upgrade pip >/dev/null 2>&1 || true
+  if [[ -f "${ROOT}/requirements.txt" ]]; then
+    "${PY_CMD}" -m pip install -r "${ROOT}/requirements.txt"
+  fi
+  if [[ "${missing_unblock}" -eq 1 ]]; then
+    "${PY_CMD}" -m pip install numpy requests Pillow opencv-python
+  fi
+
+  if ! "${PY_CMD}" -c "import fastapi,uvicorn,pydantic,cv2,numpy,requests,PIL" >/dev/null 2>&1; then
+    echo "自动安装后仍有缺失依赖，请执行 ./bootstrap.sh 后重试。"
+    exit 1
+  fi
+}
+
+ensure_python_deps
 
 exec "${PY_CMD}" -m uvicorn webapi.app:app --app-dir "${ROOT}" --host "${WEB_HOST}" --port "${WEB_PORT}" --reload

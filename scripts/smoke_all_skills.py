@@ -6,6 +6,7 @@
 
 可选环境变量（完整表见仓库根 **`.env.example`「九·1」**；亦可写入 `.env.local`）：
   OMLXCLI_SMOKE_NETWORK=1
+  OMLXCLI_SMOKE_STOCK=1
   OMLXCLI_SMOKE_PDF_PATH=/绝对路径/样例.pdf
   OMLXCLI_SMOKE_IMAGE_PATH=/绝对路径/样例.png
   OMLXCLI_SMOKE_AUDIO_PATH=/绝对路径/样例.m4a
@@ -48,6 +49,11 @@ def _expand(expr: str) -> str:
 
 def _want_network() -> bool:
     return (os.getenv("OMLXCLI_SMOKE_NETWORK") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _want_stock_smoke() -> bool:
+    """股票 skills 冒烟默认关闭，避免外网风控导致误报。"""
+    return (os.getenv("OMLXCLI_SMOKE_STOCK") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _want_http_eval() -> bool:
@@ -193,6 +199,27 @@ def main() -> int:
                 expr = "weather_now('Beijing')"
             else:
                 expr = "weather_forecast('Beijing', days=2)"
+        elif name.startswith("stock_"):
+            if not _want_network() or not _want_stock_smoke():
+                skip_reason = "股票技能需 OMLXCLI_SMOKE_NETWORK=1 且 OMLXCLI_SMOKE_STOCK=1（默认关闭避免风控误报）"
+            elif name == "stock_search":
+                expr = "stock_search('贵州茅台', limit=3)"
+            elif name == "stock_quote":
+                expr = "stock_quote('600519', instrument='stock')"
+            elif name == "stock_hot_list":
+                expr = "stock_hot_list(limit=5)"
+            elif name == "stock_unusual":
+                expr = "stock_unusual(limit=10)"
+            elif name == "stock_brief":
+                expr = "stock_brief('600519')"
+            elif name == "stock_kline":
+                expr = "stock_kline('600519', period='day', count=30, adjust='qfq')"
+            elif name == "stock_history_trades":
+                expr = "stock_history_trades('600519', count=30)"
+            elif name == "stock_kline_summary":
+                expr = "stock_kline_summary('600519', period='day', bars=30)"
+            else:
+                skip_reason = f"未配置表达式: {name}"
         elif name.startswith("pdf_"):
             pdf = (os.getenv("OMLXCLI_SMOKE_PDF_PATH") or "").strip()
             if not pdf or not Path(pdf).is_file():
