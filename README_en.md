@@ -111,7 +111,8 @@ cp .env.example .env.local
 ./start_web.sh
 ```
 
-`bootstrap.sh` defaults to auto-installing macOS system deps (`ripgrep`, `fd`, `ffmpeg`, `poppler`, `tesseract`) and Playwright Chromium.
+`bootstrap.sh` now defaults to auto-installing macOS system deps (`ripgrep`, `fd`, `ffmpeg`, `poppler`, `tesseract`, `node`), Python deps + Playwright Chromium, and also attempts to install Claude Code CLI (`@anthropic-ai/claude-code`).
+When `OMLXCLI_ENABLE_CLAUDE_CODE=1`, `start_web.sh` also performs a `claude` command preflight and a fallback install attempt before starting the server.
 If you need to skip these in CI or constrained environments:
 
 ```bash

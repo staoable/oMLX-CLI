@@ -114,7 +114,8 @@ cp .env.example .env.local
 ./start_web.sh
 ```
 
-`bootstrap.sh` 默认会在 macOS 自动安装系统依赖（`ripgrep`、`fd`、`ffmpeg`、`poppler`、`tesseract`）以及 Playwright Chromium。
+`bootstrap.sh` 默认会在 macOS 自动安装系统依赖（`ripgrep`、`fd`、`ffmpeg`、`poppler`、`tesseract`、`node`），安装 Python 依赖与 Playwright Chromium，并自动尝试安装 Claude Code CLI（`@anthropic-ai/claude-code`）。
+`start_web.sh` 在检测到 `OMLXCLI_ENABLE_CLAUDE_CODE=1` 时，也会先自检 `claude` 命令并做一次兜底安装。
 若在 CI 或受限环境需要跳过，可使用：
 
 ```bash

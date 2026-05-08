@@ -147,11 +147,12 @@
 
 ```bash
 git clone https://github.com/staoable/oMLX-CLI.git && cd oMLX-CLI
-./bootstrap.sh && cp .env.example .env.local   # data dir, search, etc.; add Web “Model settings” in UI for chat keys
+./bootstrap.sh && cp .env.example .env.local
 ./start_web.sh
 ```
 
-`bootstrap.sh` 默认会在 macOS 自动补齐系统依赖（`ripgrep`、`fd`、`ffmpeg`、`poppler`、`tesseract`）并安装 Playwright Chromium。若需跳过：
+`bootstrap.sh` 默认会在 macOS 自动补齐系统依赖（`ripgrep`、`fd`、`ffmpeg`、`poppler`、`tesseract`、`node`），安装 Python 依赖 + Playwright Chromium，并自动尝试安装 Claude Code CLI（`@anthropic-ai/claude-code`）。  
+`start_web.sh` 在检测到 `OMLXCLI_ENABLE_CLAUDE_CODE=1` 时，也会做一次 `claude` 自检与兜底安装。若需跳过部分自动安装：
 `AUTO_INSTALL_SYSTEM_DEPS=0 AUTO_INSTALL_PLAYWRIGHT_CHROMIUM=0 ./bootstrap.sh`
 
 Then open **[http://127.0.0.1:8788/ui/](http://127.0.0.1:8788/ui/)** — or read **[README_en.md](README_en.md)** / **[README_cn.md](README_cn.md)** for ports, optional skills (PDF, search, Apple Silicon STT), and CI.

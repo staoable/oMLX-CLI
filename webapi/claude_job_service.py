@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from webapi.session_store import SessionStore
+
+logger = logging.getLogger(__name__)
 
 
 def claude_code_feature_enabled() -> bool:
@@ -74,6 +77,41 @@ def _extract_session_id(text: str) -> str:
     if not m:
         return ""
     return m.group(1).strip()
+
+
+def _normalize_tail_for_message(text: str, max_chars: int = 5000) -> str:
+    s = (text or "").strip()
+    if not s:
+        return ""
+    if len(s) > max_chars:
+        s = s[-max_chars:]
+    return s.strip()
+
+
+def _is_telemetry_export_only_failure(text: str) -> bool:
+    low = (text or "").lower()
+    if not low:
+        return False
+    telemetry_markers = (
+        "1p event logging",
+        "failed to export",
+        "events failed to export",
+    )
+    if not any(m in low for m in telemetry_markers):
+        return False
+    hard_fail_markers = (
+        "api error",
+        "authentication",
+        "unauthorized",
+        "forbidden",
+        "traceback",
+        "syntaxerror",
+        "referenceerror",
+        "fatal",
+        "segmentation fault",
+        "permission denied",
+    )
+    return not any(m in low for m in hard_fail_markers)
 
 
 def _strict_report_template_enabled() -> bool:
@@ -284,11 +322,13 @@ class ClaudeJobService:
                     log_f.close()
                 except OSError:
                     pass
-            self._store.update_claude_job(
-                job_id,
+            self._transition_terminal_from_status(
+                job_id=job_id,
+                expect_status="queued",
                 status="failed",
                 exit_code=1,
                 error_summary=f"spawn:{type(exc).__name__}:{exc}",
+                report_text="",
             )
             return {"ok": False, "error": "spawn_failed", "message": str(exc), "job_id": job_id}
 
@@ -316,6 +356,100 @@ class ClaudeJobService:
             "claude_session_id": resume_sid,
             "hint": "可在「Claude」面板轮询状态与日志，或使用 claude_job_status / claude_job_logs skill。",
         }
+
+    def _build_terminal_message(
+        self,
+        *,
+        job_id: str,
+        status: str,
+        exit_code: int | None,
+        report_text: str,
+        error_summary: str,
+    ) -> str:
+        short = (job_id or "")[:8]
+        report = _normalize_tail_for_message(report_text, max_chars=5000)
+        err = (error_summary or "").strip()
+        marker = f"<!-- claude_job_event:{job_id}:{status} -->"
+        if status == "completed":
+            text = f"Claude 任务 {short}… 已完成（exit_code={exit_code if exit_code is not None else 0}）。"
+            if report:
+                text += f"\n完整报告：\n{report}"
+            return f"{text}\n{marker}"
+        if status == "failed":
+            text = f"Claude 任务 {short}… 执行失败（exit_code={exit_code if exit_code is not None else '-'}）。"
+            if err:
+                text += f"\n错误摘要：{err}"
+            if report:
+                text += f"\n完整报告：\n{report}"
+            return f"{text}\n{marker}"
+        # cancelled
+        text = f"Claude 任务 {short}… 已取消。"
+        if err:
+            text += f"\n原因：{err}"
+        if report:
+            text += f"\n任务输出：\n{report}"
+        return f"{text}\n{marker}"
+
+    def _persist_terminal_message(self, *, row: dict[str, Any], report_text: str = "") -> None:
+        try:
+            status = str(row.get("status") or "")
+            if status not in ("completed", "failed", "cancelled"):
+                return
+            session_id = str(row.get("session_id") or "")
+            job_id = str(row.get("id") or "")
+            if not session_id or not job_id:
+                return
+            msg = self._build_terminal_message(
+                job_id=job_id,
+                status=status,
+                exit_code=row.get("exit_code"),
+                report_text=report_text or str(row.get("result_summary") or ""),
+                error_summary=str(row.get("error_summary") or ""),
+            )
+            # 幂等：同 job_id + status 终态消息只写一次。
+            marker = f"claude_job_event:{job_id}:{status}"
+            recent = self._store.list_messages(session_id, limit=600)
+            if any(marker in str(m.get("content") or "") for m in recent):
+                return
+            self._store.add_message(
+                session_id=session_id,
+                role="assistant",
+                content=msg,
+                kind="assistant",
+            )
+        except Exception:
+            # 不能让消息写入异常中断任务状态收尾流程。
+            logger.exception("persist_claude_terminal_message_failed")
+
+    def _transition_terminal_from_status(
+        self,
+        *,
+        job_id: str,
+        expect_status: str,
+        status: str,
+        exit_code: int,
+        error_summary: str | None = None,
+        result_summary: str | None = None,
+        claude_session_id: str | None = None,
+        report_text: str = "",
+    ) -> bool:
+        changed = self._store.update_claude_job_if_status(
+            job_id,
+            expect_status=expect_status,
+            status=status,
+            exit_code=exit_code,
+            error_summary=error_summary,
+            result_summary=result_summary,
+            claude_session_id=claude_session_id,
+        )
+        if not changed:
+            return False
+        try:
+            final_row = self._store.get_claude_job(job_id)
+        except KeyError:
+            return False
+        self._persist_terminal_message(row=final_row, report_text=report_text)
+        return True
 
     def _start_next_queued(self, session_id: str) -> None:
         with self._queue_lock:
@@ -350,11 +484,13 @@ class ClaudeJobService:
                 session_id = ""
             code = int(proc.wait())
         except Exception as exc:  # noqa: BLE001
-            self._store.update_claude_job(
-                job_id,
+            self._transition_terminal_from_status(
+                job_id=job_id,
+                expect_status="running",
                 status="failed",
                 exit_code=1,
                 error_summary=f"wait_error:{type(exc).__name__}:{exc}",
+                report_text="",
             )
             with self._lock:
                 self._procs.pop(job_id, None)
@@ -379,12 +515,14 @@ class ClaudeJobService:
                 self._procs.pop(job_id, None)
             return
 
-        self._store.update_claude_job(
-            job_id,
+        self._transition_terminal_from_status(
+            job_id=job_id,
+            expect_status="running",
             status="completed" if code == 0 else "failed",
             exit_code=code,
             result_summary=summary,
             claude_session_id=claude_sid,
+            report_text=tail,
         )
         self._trim_log_if_oversize(job_id)
         with self._lock:
@@ -522,22 +660,31 @@ class ClaudeJobService:
         tail = _tail_bytes(log_path, 120_000)
         summary = tail.strip()[-4000:] if tail else ""
         low = (tail or "").lower()
-        looks_error = ("api error" in low) or ("traceback" in low) or ("error:" in low)
+        telemetry_only = _is_telemetry_export_only_failure(tail)
+        looks_error = (("api error" in low) or ("traceback" in low) or ("error:" in low)) and not telemetry_only
         if not tail:
-            self._store.update_claude_job(
-                job_id,
+            self._transition_terminal_from_status(
+                job_id=job_id,
+                expect_status="running",
                 status="failed",
                 exit_code=1,
                 error_summary="stale_running_no_process_no_log",
+                report_text="",
             )
             return
-        self._store.update_claude_job(
-            job_id,
+        self._transition_terminal_from_status(
+            job_id=job_id,
+            expect_status="running",
             status="failed" if looks_error else "completed",
             exit_code=1 if looks_error else 0,
-            error_summary="stale_running_log_indicates_error" if looks_error else "stale_running_recovered",
+            error_summary=(
+                "stale_running_log_indicates_error"
+                if looks_error
+                else ("stale_running_telemetry_export_warning" if telemetry_only else "stale_running_recovered")
+            ),
             result_summary=summary,
             claude_session_id=_extract_session_id(tail),
+            report_text=tail,
         )
 
     def get_job(self, session_id: str, job_id: str) -> dict[str, Any]:
@@ -574,16 +721,25 @@ class ClaudeJobService:
         if row["status"] not in ("running", "queued"):
             return {"ok": True, "status": row["status"], "message": "任务已结束，无需取消。"}
         if row["status"] == "queued":
-            self._store.update_claude_job(
-                job_id,
+            self._transition_terminal_from_status(
+                job_id=job_id,
+                expect_status="queued",
                 status="cancelled",
                 exit_code=-1,
                 error_summary="user_cancelled_while_queued",
+                report_text="",
             )
             return {"ok": True, "status": "cancelled"}
         pid = row.get("pid")
         if not pid:
-            self._store.update_claude_job(job_id, status="cancelled", exit_code=-1, error_summary="no_pid")
+            self._transition_terminal_from_status(
+                job_id=job_id,
+                expect_status="running",
+                status="cancelled",
+                exit_code=-1,
+                error_summary="no_pid",
+                report_text="",
+            )
             return {"ok": True, "status": "cancelled"}
 
         with self._lock:
@@ -599,11 +755,13 @@ class ClaudeJobService:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "message": str(exc)}
 
-        self._store.update_claude_job(
-            job_id,
+        self._transition_terminal_from_status(
+            job_id=job_id,
+            expect_status="running",
             status="cancelled",
             exit_code=-15,
             error_summary="user_cancelled",
+            report_text="",
         )
         with self._lock:
             self._procs.pop(job_id, None)

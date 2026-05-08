@@ -323,12 +323,25 @@ class ContextManager:
         total = sum(_content_len(m["content"]) for m in messages)
         if total <= budget_chars:
             return messages
+        raw_ratio = (os.getenv("OMLXCLI_SYSTEM_BUDGET_RATIO") or "0.6").strip()
+        try:
+            system_ratio = float(raw_ratio)
+        except ValueError:
+            system_ratio = 0.6
+        system_ratio = max(0.1, min(system_ratio, 1.0))
+        system_cap = int(budget_chars * system_ratio)
         keep: list[dict[str, Any]] = []
         consumed = 0
+        system_consumed = 0
         for m in reversed(messages):
             size = _content_len(m["content"])
-            if consumed + size > budget_chars and m["role"] != "system":
+            role = str(m.get("role") or "")
+            if consumed + size > budget_chars:
+                continue
+            if role == "system" and system_consumed + size > system_cap:
                 continue
             keep.append(m)
             consumed += size
+            if role == "system":
+                system_consumed += size
         return list(reversed(keep))

@@ -204,6 +204,20 @@ body {
   text-overflow: ellipsis;
 }
 
+.session-running-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.18);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  vertical-align: middle;
+}
+
 .session-meta {
   font-size: 12px;
   color: var(--text-muted);
@@ -832,6 +846,7 @@ body {
 }
 
 .message__bubble {
+  position: relative;
   max-width: min(100%, 42rem);
   border-radius: var(--radius-lg);
   padding: 14px 16px;
@@ -857,6 +872,89 @@ body {
 
 .message--streaming .message__bubble {
   border-color: rgba(59, 130, 246, 0.35);
+}
+
+.message-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(24, 24, 27, 0.92);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.message-copy-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: #27272a;
+}
+
+.message-unblock-badge {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(148, 163, 184, 0.1);
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.message-unblock-badge strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.unblock-fix-btn {
+  margin-left: auto;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(24, 24, 27, 0.9);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.unblock-fix-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.message-unblock-badge--ok {
+  border-color: rgba(16, 185, 129, 0.55);
+  background: rgba(16, 185, 129, 0.14);
+}
+
+.message-unblock-badge--running {
+  border-color: rgba(59, 130, 246, 0.55);
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.message-unblock-badge--bad {
+  border-color: rgba(248, 113, 113, 0.62);
+  background: rgba(248, 113, 113, 0.13);
+}
+
+.message-unblock-badge--warn {
+  border-color: rgba(245, 158, 11, 0.58);
+  background: rgba(245, 158, 11, 0.13);
+}
+
+.message--assistant .markdown-body {
+  padding-top: 22px;
 }
 
 .message-attachments {
@@ -945,6 +1043,84 @@ body {
 
 .exec-timeline .exec-steps {
   margin-top: 4px;
+}
+
+.message-exec-history {
+  margin-top: 10px;
+  border: 1px solid var(--timeline-border);
+  border-radius: 10px;
+  background: var(--timeline-bg);
+}
+
+.message-exec-history__summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--timeline-border);
+}
+
+.message-exec-history__summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-exec-history__list {
+  padding: 6px 8px 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.message-exec-history__item {
+  border: 1px solid var(--timeline-border);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.message-exec-history__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.message-exec-history__cmd {
+  margin-top: 4px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.message-exec-history__meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.message-exec-history__detail {
+  margin-top: 6px;
+}
+
+.message-exec-history__detail summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.message-exec-history__detail pre {
+  margin: 6px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px;
+  background: #0e0e10;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 
 .exec-trace-row {
@@ -1104,6 +1280,10 @@ body {
 
 .markdown-body table {
   width: 100%;
+  min-width: 640px;
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   border-collapse: collapse;
   margin: 0.85em 0;
   font-size: 14px;
@@ -1114,11 +1294,28 @@ body {
   border: 1px solid var(--border-strong);
   padding: 8px 10px;
   text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .markdown-body th {
   background: rgba(255, 255, 255, 0.05);
   font-weight: 600;
+}
+
+/* 避免首列（如“优先级”）被长列挤压成逐字换行 */
+.markdown-body th:first-child,
+.markdown-body td:first-child {
+  min-width: 68px;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+/* 文件名/路径等内联 code 在表格里保持整段可读，必要时通过横向滚动查看 */
+.markdown-body table code {
+  white-space: nowrap;
+  word-break: normal;
 }
 
 /* ----- Composer ----- */

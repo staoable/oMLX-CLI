@@ -81,6 +81,26 @@ class P0BasicsTest(unittest.TestCase):
             else:
                 os.environ["OMLXCLI_EXEC_BLOCKLIST_RE"] = old
 
+    def test_trim_to_budget_caps_system_messages(self) -> None:
+        old_ratio = os.environ.get("OMLXCLI_SYSTEM_BUDGET_RATIO")
+        os.environ["OMLXCLI_SYSTEM_BUDGET_RATIO"] = "0.5"
+        try:
+            msgs = [
+                {"role": "system", "content": "S" * 90},
+                {"role": "user", "content": "U" * 30},
+                {"role": "assistant", "content": "A" * 30},
+            ]
+            out = ContextManager._trim_to_budget(msgs, budget_chars=100)
+            total = sum(len(str(m["content"])) for m in out)
+            sys_total = sum(len(str(m["content"])) for m in out if m.get("role") == "system")
+            self.assertLessEqual(total, 100)
+            self.assertLessEqual(sys_total, 50)
+        finally:
+            if old_ratio is None:
+                os.environ.pop("OMLXCLI_SYSTEM_BUDGET_RATIO", None)
+            else:
+                os.environ["OMLXCLI_SYSTEM_BUDGET_RATIO"] = old_ratio
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,8 +14,11 @@ import json
 import os
 import re
 import subprocess
+import sys
+import threading
 import urllib.error
 import time
+from datetime import datetime
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -60,13 +63,87 @@ _EXCHANGE_NAME = {
     116: "港股",
 }
 
-_LAST_UNBLOCK_TS = 0.0
-_UNBLOCK_COOLDOWN_SEC = 300.0
 _UNBLOCK_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "_eastmoney_unblock",
     "pass.js",
 )
+_UNBLOCK_LOCK = threading.Lock()
+_UNBLOCK_RUNNING = False
+_UNBLOCK_COND = threading.Condition(_UNBLOCK_LOCK)
+_UNBLOCK_STATS = {
+    "triggered": 0,
+    "waited": 0,
+    "success": 0,
+    "failed": 0,
+    "timeout": 0,
+}
+_UNBLOCK_LAST: dict[str, Any] = {
+    "status": "idle",
+    "message": "",
+    "returncode": None,
+    "ts": None,
+}
+_UNBLOCK_PROCESS_MIN_TIMEOUT_SEC = 90.0
+
+
+def _unblock_debug_enabled() -> bool:
+    raw = (os.getenv("OMLXCLI_STOCK_UNBLOCK_DEBUG") or "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    # 默认开启，可通过 OMLXCLI_STOCK_UNBLOCK_DEBUG=0 显式关闭。
+    return True
+
+
+def _unblock_log(msg: str) -> None:
+    if not _unblock_debug_enabled():
+        return
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[stock_unblock] {now} {msg}", file=sys.stderr, flush=True)
+
+
+def _set_unblock_last(status: str, message: str, returncode: int | None = None) -> None:
+    _UNBLOCK_LAST["status"] = status
+    _UNBLOCK_LAST["message"] = message
+    _UNBLOCK_LAST["returncode"] = returncode
+    _UNBLOCK_LAST["ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _classify_unblock_failure(returncode: int | None, stdout_text: str, stderr_text: str) -> tuple[str, str]:
+    s = f"{stdout_text}\n{stderr_text}".lower()
+    if "browser_fallback_locked_by_other_process" in s:
+        return "running", "browser_fallback_in_progress_elsewhere"
+    if "playwright_unavailable" in s or "no module named 'playwright'" in s:
+        return "failed", "playwright_missing: pip install playwright && python -m playwright install chromium"
+    if "preflight_failed" in s and "python3_unavailable" in s:
+        return "failed", "python3_unavailable"
+    if "preflight_failed" in s and "missing_gen_track" in s:
+        return "failed", "gen_track_missing"
+    if "preflight_failed" in s and "missing_browser_fallback" in s:
+        return "failed", "browser_fallback_missing"
+    if "still_blocked_after_browser_fallback" in s:
+        return "failed", "still_blocked_after_browser_fallback"
+    if "still_blocked_after_unblock_attempts" in s:
+        return "failed", "still_blocked_after_auto_attempts"
+    if returncode not in (None, 0):
+        return "failed", f"pass_js_returncode={returncode}"
+    return "failed", "unblock_not_effective"
+
+
+def _unblock_state_snapshot(timeout: float = 3.0) -> dict[str, Any]:
+    blocked, check_err = _eastmoney_check_block(timeout=timeout)
+    with _UNBLOCK_LOCK:
+        stats = dict(_UNBLOCK_STATS)
+        last = dict(_UNBLOCK_LAST)
+        running = bool(_UNBLOCK_RUNNING)
+    return {
+        "enabled": True,
+        "running": running,
+        "check_blocked": blocked,
+        "check_error": check_err,
+        "stats": stats,
+        "last": last,
+    }
 
 
 def _http_get_json(url: str, timeout: float = 8.0, retries: int = 1) -> dict[str, Any]:
@@ -111,20 +188,22 @@ def _eastmoney_get_json(url: str, timeout: float = 8.0, retries: int = 3) -> dic
         "Accept-Encoding": "identity",
         "Referer": "https://quote.eastmoney.com/",
         "Origin": "https://quote.eastmoney.com",
-        "Connection": "close",
     }
     last_err: Exception | None = None
+    unblock_attempted = False
     for i in range(retries + 1):
-        if i == 0 and _eastmoney_is_blocked(timeout=timeout):
+        if i == 0 and (not unblock_attempted) and _eastmoney_is_blocked(timeout=timeout):
             _eastmoney_try_unblock(timeout=timeout)
+            unblock_attempted = True
         req = urllib.request.Request(url, headers=headers)
         try:
             with opener.open(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8", errors="replace"))
         except Exception as exc:  # noqa: BLE001
             last_err = exc
-            if _eastmoney_is_blocked(timeout=timeout):
+            if (not unblock_attempted) and _eastmoney_is_blocked(timeout=timeout):
                 _eastmoney_try_unblock(timeout=timeout)
+                unblock_attempted = True
             # RemoteDisconnected/502/503 等风控或网关波动场景，做退避重试
             if i < retries:
                 time.sleep(0.4 * (i + 1))
@@ -135,8 +214,8 @@ def _eastmoney_get_json(url: str, timeout: float = 8.0, retries: int = 3) -> dic
     ) from last_err
 
 
-def _eastmoney_is_blocked(timeout: float = 6.0) -> bool:
-    """通过 checkuser 接口判断是否被东财封控。"""
+def _eastmoney_check_block(timeout: float = 6.0) -> tuple[bool | None, str | None]:
+    """通过 checkuser 接口判断封控状态，返回 (blocked, error)。"""
     url = "https://i.eastmoney.com/websitecaptcha/api/checkuser?callback=wsc_checkuser"
     req = urllib.request.Request(
         url,
@@ -151,33 +230,92 @@ def _eastmoney_is_blocked(timeout: float = 6.0) -> bool:
             text = resp.read().decode("utf-8", errors="replace")
         m = re.search(r"wsc_checkuser\((.*)\)", text)
         if not m:
-            return False
+            return None, "checkuser_parse_failed"
         data = json.loads(m.group(1))
-        return bool(data.get("block"))
-    except Exception:  # noqa: BLE001
-        return False
+        return bool(data.get("block")), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def _eastmoney_is_blocked(timeout: float = 6.0) -> bool:
+    """兼容旧调用：异常/未知按未封控处理。"""
+    blocked, _ = _eastmoney_check_block(timeout=timeout)
+    return bool(blocked)
 
 
 def _eastmoney_try_unblock(timeout: float = 20.0) -> None:
     """执行内置解封脚本（node pass.js），失败不抛出。"""
-    global _LAST_UNBLOCK_TS
+    global _UNBLOCK_RUNNING
     if not os.path.isfile(_UNBLOCK_SCRIPT):
+        _set_unblock_last("skipped", "pass.js not found")
+        _unblock_log("skip: pass.js not found")
         return
-    now = time.time()
-    if now - _LAST_UNBLOCK_TS < max(10.0, _UNBLOCK_COOLDOWN_SEC):
+    blocked_before, before_err = _eastmoney_check_block(timeout=min(float(timeout), 8.0))
+    if blocked_before is False:
+        _set_unblock_last("skipped", "checkuser says not blocked")
+        _unblock_log("skip: checkuser says not blocked")
         return
+    if blocked_before is None:
+        _set_unblock_last("unknown", f"checkuser unknown before unblock ({before_err})")
+        _unblock_log(f"warn: checkuser unknown before unblock ({before_err})")
+    wait_timeout = max(1.0, min(float(timeout), 30.0))
+    with _UNBLOCK_LOCK:
+        if _UNBLOCK_RUNNING:
+            # 并发单飞：已有解封流程在跑，等待其完成后直接返回，避免重复触发。
+            _UNBLOCK_STATS["waited"] += 1
+            _unblock_log(f"wait: another unblock is running, wait_timeout={wait_timeout:.1f}s")
+            _UNBLOCK_COND.wait(timeout=wait_timeout)
+            return
+        _UNBLOCK_RUNNING = True
+        _UNBLOCK_STATS["triggered"] += 1
+        _set_unblock_last("running", f"start pass.js timeout={timeout}s")
+        _unblock_log(f"trigger: start pass.js, timeout={timeout}s")
     try:
-        subprocess.run(
+        unblock_timeout = max(float(timeout), _UNBLOCK_PROCESS_MIN_TIMEOUT_SEC)
+        proc = subprocess.run(
             ["node", _UNBLOCK_SCRIPT],
             shell=False,
             check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=unblock_timeout,
         )
-        _LAST_UNBLOCK_TS = now
+        out = (proc.stdout or "").strip()
+        err = (proc.stderr or "").strip()
+        if int(proc.returncode or 0) == 0:
+            blocked_after, after_err = _eastmoney_check_block(timeout=min(float(timeout), 8.0))
+            if blocked_after is False:
+                _UNBLOCK_STATS["success"] += 1
+                _set_unblock_last("success", "unblocked=true", 0)
+                _unblock_log(f"done: returncode=0 unblocked=true stats={_UNBLOCK_STATS}")
+            else:
+                _UNBLOCK_STATS["failed"] += 1
+                detail = after_err or "still_blocked"
+                _set_unblock_last("failed", f"unblock_not_effective detail={detail}", 0)
+                _unblock_log(
+                    "done: returncode=0 but unblock_not_effective "
+                    f"detail={detail} stdout={out[:180]} stderr={err[:180]} stats={_UNBLOCK_STATS}"
+                )
+        else:
+            _UNBLOCK_STATS["failed"] += 1
+            st, msg = _classify_unblock_failure(int(proc.returncode or 0), out, err)
+            _set_unblock_last(st, msg, int(proc.returncode or 0))
+            _unblock_log(
+                f"done: returncode={proc.returncode} stdout={out[:180]} stderr={err[:180]} stats={_UNBLOCK_STATS}"
+            )
+    except subprocess.TimeoutExpired:
+        _UNBLOCK_STATS["timeout"] += 1
+        _set_unblock_last("timeout", "pass.js timeout", None)
+        _unblock_log(f"error: timeout stats={_UNBLOCK_STATS}")
     except Exception:  # noqa: BLE001
-        _LAST_UNBLOCK_TS = now
+        _UNBLOCK_STATS["failed"] += 1
+        _set_unblock_last("failed", "exception during unblock")
+        _unblock_log(f"error: exception stats={_UNBLOCK_STATS}")
+    finally:
+        with _UNBLOCK_LOCK:
+            _UNBLOCK_RUNNING = False
+            _UNBLOCK_COND.notify_all()
 
 
 def _http_post_json(
@@ -208,6 +346,47 @@ def _http_post_json(
                 time.sleep(0.3 * (attempt + 1))
                 continue
     raise RuntimeError(f"请求失败: {type(last_err).__name__}: {last_err}") from last_err
+
+
+def _eastmoney_post_json(
+    url: str,
+    payload: dict[str, Any],
+    timeout: float = 8.0,
+    retries: int = 3,
+) -> dict[str, Any]:
+    """东财专用 POST：带风控检测与自动解封逻辑。"""
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "User-Agent": _UA,
+        "Accept": "application/json,text/plain,*/*",
+        "Content-Type": "application/json",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Accept-Encoding": "identity",
+        "Referer": "https://quote.eastmoney.com/",
+        "Origin": "https://quote.eastmoney.com",
+    }
+    unblock_attempted = False
+    last_err: Exception | None = None
+    for i in range(retries + 1):
+        if i == 0 and (not unblock_attempted) and _eastmoney_is_blocked(timeout=timeout):
+            _eastmoney_try_unblock(timeout=timeout)
+            unblock_attempted = True
+        req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8", errors="replace"))
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            if (not unblock_attempted) and _eastmoney_is_blocked(timeout=timeout):
+                _eastmoney_try_unblock(timeout=timeout)
+                unblock_attempted = True
+            if i < retries:
+                time.sleep(0.4 * (i + 1))
+                continue
+    raise RuntimeError(
+        "eastmoney post failed (possible WAF/rate-limit/block): "
+        f"{type(last_err).__name__}: {last_err}"
+    ) from last_err
 
 
 def _norm_codes(codes: Any) -> list[str]:
@@ -548,6 +727,7 @@ def stock_quote(
         "quotes": quotes,
         "unresolved": unresolved,
         "ambiguities": ambiguities,
+        "unblock": _unblock_state_snapshot(timeout=min(float(timeout_sec), 3.0)),
     }
 
 
@@ -574,7 +754,7 @@ def stock_hot_list(
     size = max(1, min(int(limit), 50))
     service = "getAllCurrentList" if k == "hot" else "getAllHisRcList"
 
-    rank_data = _http_post_json(
+    rank_data = _eastmoney_post_json(
         f"https://emappdata.eastmoney.com/stockrank/{service}",
         payload={
             "appId": "appId01",
@@ -611,7 +791,7 @@ def stock_hot_list(
         }
     )
     detail_url = f"https://push2.eastmoney.com/api/qt/ulist.np/get?{params}"
-    detail_data = _http_get_json(detail_url, timeout=float(timeout_sec), retries=1)
+    detail_data = _eastmoney_get_json(detail_url, timeout=float(timeout_sec), retries=3)
     diff = (detail_data.get("data") or {}).get("diff") or []
     items: list[dict[str, Any]] = []
     for row in diff[:size]:
@@ -842,13 +1022,14 @@ def stock_kline(
     data_obj: dict[str, Any] | None = None
     used_secid = None
     for secid in secids:
+        end_date = datetime.now().strftime("%Y%m%d")
         params = urllib.parse.urlencode(
             {
                 "secid": secid,
                 "klt": period_map[p],
                 "fqt": adjust_map[a],
                 "lmt": lmt,
-                "end": "20500101",
+                "end": end_date,
                 "fields1": "f1,f2,f3,f4,f5,f6",
                 "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
             }
@@ -896,6 +1077,7 @@ def stock_kline(
         "secid": used_secid,
         "count": len(klines),
         "klines": klines,
+        "unblock": _unblock_state_snapshot(timeout=min(float(timeout_sec), 3.0)),
     }
 
 
@@ -968,6 +1150,7 @@ def stock_history_trades(
         "secid": used_secid,
         "count": len(trades),
         "trades": trades,
+        "unblock": _unblock_state_snapshot(timeout=min(float(timeout_sec), 3.0)),
     }
 
 

@@ -47,13 +47,36 @@ def claude_job_start(
     if mode not in ("continue", "isolated"):
         return {"ok": False, "error": "bad_context_mode", "message": "context_mode 仅支持 continue 或 isolated。"}
     svc = get_claude_job_service()
-    return svc.start_job(
+    ret = svc.start_job(
         session_id=sid,
         workdir=wd,
         prompt=prompt,
         max_turns=max_turns,
         context_mode=mode,
     )
+    if not bool(ret.get("ok")):
+        return ret
+    job_id = str(ret.get("job_id") or "").strip()
+    if not job_id:
+        return {"ok": False, "error": "start_missing_job_id", "message": "任务启动返回缺少 job_id。"}
+    try:
+        # 防误导：启动成功后立即回读，确保任务确实落在当前会话与当前实例数据库中。
+        _ = svc.get_job(sid, job_id)
+    except KeyError:
+        return {
+            "ok": False,
+            "error": "start_not_found_after_create",
+            "message": "任务启动返回成功，但在当前会话中查询不到该 job。请确认会话未切换，或重启后重试。",
+            "job_id": job_id,
+        }
+    except PermissionError as exc:
+        return {
+            "ok": False,
+            "error": "start_job_session_mismatch",
+            "message": f"任务启动后会话校验失败：{exc}",
+            "job_id": job_id,
+        }
+    return ret
 
 
 @skill(

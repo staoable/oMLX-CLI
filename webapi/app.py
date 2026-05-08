@@ -74,15 +74,23 @@ def _allow_message_request(session_id: str, client_ip: str) -> tuple[bool, int]:
     limit = _msg_rate_limit_count()
     window = float(_msg_rate_limit_window_sec())
     now = time.monotonic()
+    cutoff = now - window
     key = f"{session_id}:{client_ip or '-'}"
     with _msg_rate_lock:
+        # 清理过期 key，避免 _msg_rate_hits 长时间增长。
+        stale_keys: list[str] = []
+        for k, qq in _msg_rate_hits.items():
+            while qq and qq[0] < cutoff:
+                qq.popleft()
+            if not qq:
+                stale_keys.append(k)
+        for k in stale_keys:
+            _msg_rate_hits.pop(k, None)
+
         q = _msg_rate_hits.get(key)
         if q is None:
             q = deque()
             _msg_rate_hits[key] = q
-        cutoff = now - window
-        while q and q[0] < cutoff:
-            q.popleft()
         if len(q) >= limit:
             retry_after = max(1, int(window - (now - q[0])))
             return False, retry_after
@@ -604,13 +612,18 @@ def send_message(session_id: str, req: SendMessageReq, request: Request) -> Stre
             yield "event: error\ndata: " + json.dumps({"message": "session not found"}, ensure_ascii=False) + "\n\n"
             return
 
-        for event in engine.stream_reply(
-            session_id=session_id,
-            user_input=req.content,
-            system_prompt=req.system_prompt,
-            attachments=req.attachments,
-        ):
-            yield f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+        try:
+            for event in engine.stream_reply(
+                session_id=session_id,
+                user_input=req.content,
+                system_prompt=req.system_prompt,
+                attachments=req.attachments,
+            ):
+                yield f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:  # noqa: BLE001
+            msg = f"会话流异常：{type(exc).__name__}: {str(exc)[:280]}"
+            yield "event: error\ndata: " + json.dumps({"message": msg}, ensure_ascii=False) + "\n\n"
+            return
         yield "event: done\ndata: {}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

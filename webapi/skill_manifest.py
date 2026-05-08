@@ -46,8 +46,25 @@ def validate_skill_ast_call(func_name: str, node: ast.Call, manifests: dict[str,
     max_total = int(meta.get("max_total_args", 48))
     n_pos = len(node.args)
     n_kw = len(node.keywords)
-    if n_pos < min_pos:
-        return False, f"{func_name} 至少需要 {min_pos} 个位置参数"
+    if n_pos + n_kw < min_pos:
+        return False, f"{func_name} 至少需要 {min_pos} 个参数"
     if n_pos + n_kw > max_total:
         return False, f"{func_name} 参数过多（>{max_total}）"
+
+    banned = (
+        ast.Call,
+        ast.Lambda,
+        ast.ListComp,
+        ast.SetComp,
+        ast.DictComp,
+        ast.GeneratorExp,
+        ast.Await,
+        ast.Yield,
+        ast.YieldFrom,
+        ast.NamedExpr,
+    )
+    for arg in list(node.args) + [kw.value for kw in node.keywords]:
+        for child in ast.walk(arg):
+            if isinstance(child, banned):
+                return False, "技能参数中包含不允许的表达式节点（如调用/推导式/lambda）"
     return True, ""

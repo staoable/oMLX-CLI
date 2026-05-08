@@ -35,10 +35,10 @@ if lsof -nP -iTCP:"${WEB_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 PY_CMD=""
-if [[ -x "${ROOT}/../.venv/bin/python" ]]; then
-  PY_CMD="${ROOT}/../.venv/bin/python"
-elif [[ -x "${ROOT}/.venv/bin/python" ]]; then
+if [[ -x "${ROOT}/.venv/bin/python" ]]; then
   PY_CMD="${ROOT}/.venv/bin/python"
+elif [[ -x "${ROOT}/../.venv/bin/python" ]]; then
+  PY_CMD="${ROOT}/../.venv/bin/python"
 elif command -v python3 >/dev/null 2>&1; then
   PY_CMD="$(command -v python3)"
 fi
@@ -81,5 +81,35 @@ ensure_python_deps() {
 }
 
 ensure_python_deps
+
+ensure_claude_cli_if_enabled() {
+  local raw="${OMLXCLI_ENABLE_CLAUDE_CODE:-}"
+  local enabled="$(echo "${raw}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${enabled}" != "1" && "${enabled}" != "true" && "${enabled}" != "yes" && "${enabled}" != "on" ]]; then
+    return 0
+  fi
+  if command -v claude >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "检测到 OMLXCLI_ENABLE_CLAUDE_CODE 已开启，但未找到 claude 命令。"
+  if command -v npm >/dev/null 2>&1; then
+    echo "尝试自动安装 Claude Code CLI..."
+    if npm i -g @anthropic-ai/claude-code; then
+      if command -v claude >/dev/null 2>&1; then
+        echo "Claude Code CLI 安装成功。"
+        return 0
+      fi
+      echo "npm 安装完成，但当前 shell 尚未识别 claude。请重开终端后再运行 ./start_web.sh"
+      exit 1
+    fi
+    echo "自动安装 Claude Code CLI 失败。请手动执行：npm i -g @anthropic-ai/claude-code"
+    exit 1
+  fi
+  echo "未检测到 npm，无法自动安装 Claude Code CLI。"
+  echo "请先安装 Node.js（macOS 可用 brew install node），然后执行：npm i -g @anthropic-ai/claude-code"
+  exit 1
+}
+
+ensure_claude_cli_if_enabled
 
 exec "${PY_CMD}" -m uvicorn webapi.app:app --app-dir "${ROOT}" --host "${WEB_HOST}" --port "${WEB_PORT}" --reload

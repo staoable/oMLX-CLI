@@ -95,3 +95,14 @@ class WorkspaceSkillsTest(unittest.TestCase):
             self.assertIn("Hello", out["text"])
         finally:
             Path(p).unlink(missing_ok=True)
+
+    def test_run_skill_rejects_nested_call_in_args(self) -> None:
+        ret = run_skill_call("date_now(__import__('os'))", self.funcs)
+        self.assertEqual(ret["exit_code"], 1)
+        self.assertIn("不允许的表达式节点", ret["stderr"])
+
+    def test_run_skill_allows_required_arg_via_keyword(self) -> None:
+        ret = run_skill_call("claude_job_start(prompt='分析项目')", self.funcs)
+        # 关键字参数应通过 AST/manifest 参数数校验，后续失败应来自上下文约束而非“缺少位置参数”。
+        self.assertNotIn("至少需要 1 个位置参数", ret["stderr"])
+        self.assertNotIn("至少需要 1 个参数", ret["stderr"])

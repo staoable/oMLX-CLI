@@ -1,7 +1,57 @@
 "use strict";
 
 const { spawn } = require("child_process");
+const { spawnSync } = require("child_process");
+const fs = require("fs");
 const path = require("path");
+const BROWSER_LOCK_FILE = path.join(__dirname, "browser_unblock.lock");
+const BROWSER_LOCK_TTL_MS = 3 * 60 * 1000;
+const COOKIE_JAR = new Map();
+
+function readSetCookies(headers) {
+  if (!headers) return [];
+  if (typeof headers.getSetCookie === "function") {
+    const arr = headers.getSetCookie();
+    if (Array.isArray(arr)) return arr;
+  }
+  const one = headers.get("set-cookie");
+  return one ? [one] : [];
+}
+
+function updateCookieJar(headers) {
+  const setCookies = readSetCookies(headers);
+  for (const line of setCookies) {
+    const first = String(line || "").split(";")[0] || "";
+    const idx = first.indexOf("=");
+    if (idx <= 0) continue;
+    const k = first.slice(0, idx).trim();
+    const v = first.slice(idx + 1).trim();
+    if (!k) continue;
+    COOKIE_JAR.set(k, v);
+  }
+}
+
+function buildCookieHeader() {
+  const items = [];
+  for (const [k, v] of COOKIE_JAR.entries()) items.push(`${k}=${v}`);
+  return items.join("; ");
+}
+
+async function emFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (!headers.has("User-Agent")) {
+    headers.set(
+      "User-Agent",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    );
+  }
+  if (!headers.has("Accept")) headers.set("Accept", "*/*");
+  const cookieLine = buildCookieHeader();
+  if (cookieLine) headers.set("Cookie", cookieLine);
+  const response = await fetch(url, { ...options, headers, redirect: "follow" });
+  updateCookieJar(response.headers);
+  return response;
+}
 
 function encrypt(n) {
   let e;
@@ -59,7 +109,13 @@ function encrypt(n) {
 }
 
 async function getContextId() {
-  const response = await fetch("https://i.eastmoney.com/websitecaptcha/api/getcontextid", { method: "POST", redirect: "follow" });
+  const response = await emFetch("https://i.eastmoney.com/websitecaptcha/api/getcontextid", {
+    method: "POST",
+    headers: {
+      Referer: "https://www.eastmoney.com/",
+      Origin: "https://www.eastmoney.com",
+    },
+  });
   const data = await response.json();
   return data && data.returncode === 0 ? data.contextid : "";
 }
@@ -69,7 +125,10 @@ async function getCaptcha(ctxid) {
   const request = Buffer.from(encrypt(str), "binary").toString("base64");
   const encoded = encodeURIComponent(request);
   const url = `https://smartvcode2.eastmoney.com/Titan/api/captcha/get?callback=cb&ctxid=${ctxid}&request=${encoded}&_=${Date.now()}`;
-  const response = await fetch(url, { method: "GET", redirect: "follow" });
+  const response = await emFetch(url, {
+    method: "GET",
+    headers: { Referer: "https://quote.eastmoney.com/" },
+  });
   const data = await response.text();
   const m = data.match(/cb\((.*)\);/);
   if (!m || !m[1]) return null;
@@ -82,7 +141,10 @@ async function validate(ctxid, type, track, distance, t) {
   const request = Buffer.from(encrypt(str), "binary").toString("base64");
   const encoded = encodeURIComponent(request);
   const url = `https://smartvcode2.eastmoney.com/Titan/api/captcha/Validate?callback=cb&ctxid=${ctxid}&request=${encoded}&_=${Date.now()}`;
-  const response = await fetch(url, { method: "GET", redirect: "follow" });
+  const response = await emFetch(url, {
+    method: "GET",
+    headers: { Referer: "https://quote.eastmoney.com/" },
+  });
   const data = await response.text();
   const m = data.match(/cb\((.*)\);/);
   if (!m || !m[1]) return null;
@@ -94,11 +156,29 @@ async function valid(ctxid, validateResult) {
   const body = new URLSearchParams();
   body.append("contextid", ctxid);
   body.append("validateresult", validateResult);
-  await fetch("https://i.eastmoney.com/websitecaptcha/api/valid", {
+  await emFetch("https://i.eastmoney.com/websitecaptcha/api/valid", {
     method: "POST",
     body,
-    redirect: "follow",
+    headers: {
+      Referer: "https://quote.eastmoney.com/",
+      Origin: "https://quote.eastmoney.com",
+    },
   });
+}
+
+async function checkBlocked() {
+  const url = "https://i.eastmoney.com/websitecaptcha/api/checkuser?callback=wsc_checkuser";
+  const response = await emFetch(url, {
+    method: "GET",
+    headers: { Referer: "https://quote.eastmoney.com/" },
+  });
+  const text = await response.text();
+  const m = text.match(/wsc_checkuser\((.*)\)/);
+  if (!m || !m[1]) {
+    return { ok: false, blocked: null, reason: "checkuser_parse_failed" };
+  }
+  const data = JSON.parse(m[1]);
+  return { ok: true, blocked: Boolean(data.block), raw: data };
 }
 
 function getSliderTrace(captchaUrl, sliderUrl) {
@@ -123,26 +203,167 @@ function getSliderTrace(captchaUrl, sliderUrl) {
   });
 }
 
-async function main() {
-  const ctxid = await getContextId();
-  if (!ctxid) return;
-  const init = await getCaptcha(ctxid);
-  if (!init || init.type !== "init") return;
-  await validate(ctxid, init.type, "", "", 0);
-  const slide = await getCaptcha(ctxid);
-  if (!slide || !slide.info) return;
-  const captchaUrl = `https://${slide.info.static_servers[0]}/${slide.info.bg}`;
-  const sliderUrl = `https://${slide.info.static_servers[0]}/${slide.info.slice}`;
-  const result = await getSliderTrace(captchaUrl, sliderUrl);
-  const times = String(result.trace).split(",");
-  const total = times[times.length - 1];
-  const check = await validate(ctxid, slide.type, result.trace, result.distance, total);
-  if (check && check.returnCode === "0" && check.data && check.data.validate) {
-    await valid(ctxid, check.data.validate);
+function runBrowserFallback() {
+  return new Promise((resolve) => {
+    const py = path.join(__dirname, "browser_unblock.py");
+    const proc = spawn("python3", [py], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    let err = "";
+    proc.stdout.on("data", (d) => { out += d.toString(); });
+    proc.stderr.on("data", (d) => { err += d.toString(); });
+    proc.on("close", (code) => {
+      resolve({ code: Number(code || 0), out: out.trim(), err: err.trim() });
+    });
+    proc.on("error", (e) => {
+      resolve({ code: 9, out: "", err: String(e) });
+    });
+  });
+}
+
+function preflightCheck() {
+  const genTrack = path.join(__dirname, "gen_track.py");
+  const browserFallback = path.join(__dirname, "browser_unblock.py");
+  if (!fs.existsSync(genTrack)) {
+    return { ok: false, code: "missing_gen_track", detail: genTrack };
+  }
+  if (!fs.existsSync(browserFallback)) {
+    return { ok: false, code: "missing_browser_fallback", detail: browserFallback };
+  }
+  const py = spawnSync("python3", ["--version"], { encoding: "utf-8" });
+  if (py.error || py.status !== 0) {
+    return { ok: false, code: "python3_unavailable", detail: String(py.error || py.stderr || py.stdout || "") };
+  }
+  return { ok: true };
+}
+
+function acquireBrowserFallbackLock() {
+  const now = Date.now();
+  try {
+    if (fs.existsSync(BROWSER_LOCK_FILE)) {
+      const raw = fs.readFileSync(BROWSER_LOCK_FILE, "utf-8");
+      let lockedAt = 0;
+      try {
+        const obj = JSON.parse(raw || "{}");
+        lockedAt = Number(obj.locked_at_ms || 0);
+      } catch {
+        lockedAt = 0;
+      }
+      if (lockedAt > 0 && now - lockedAt > BROWSER_LOCK_TTL_MS) {
+        fs.unlinkSync(BROWSER_LOCK_FILE);
+      }
+    }
+  } catch {
+    // ignore stale lock cleanup errors, continue to lock attempt
+  }
+  try {
+    const fd = fs.openSync(BROWSER_LOCK_FILE, "wx");
+    const payload = JSON.stringify({
+      pid: process.pid,
+      locked_at_ms: now,
+      locked_at_iso: new Date(now).toISOString(),
+    });
+    fs.writeFileSync(fd, payload);
+    fs.closeSync(fd);
+    return true;
+  } catch {
+    return false;
   }
 }
 
-main().catch(() => {
-  process.exitCode = 0;
+function releaseBrowserFallbackLock() {
+  try {
+    if (fs.existsSync(BROWSER_LOCK_FILE)) fs.unlinkSync(BROWSER_LOCK_FILE);
+  } catch {
+    // ignore lock cleanup errors
+  }
+}
+
+async function main() {
+  const preflight = preflightCheck();
+  if (!preflight.ok) {
+    throw new Error(`preflight_failed code=${preflight.code} detail=${String(preflight.detail || "").slice(0, 220)}`);
+  }
+  // 先打开门户页建立站点会话，贴近“人工打开页面后再滑块验证”的真实路径。
+  await emFetch("https://www.eastmoney.com/", {
+    method: "GET",
+    headers: { Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+  });
+  const before = await checkBlocked();
+  if (!before.ok) {
+    throw new Error(before.reason || "check_block_before_failed");
+  }
+  if (!before.blocked) {
+    console.log(JSON.stringify({ ok: true, action: "skip_not_blocked" }));
+    return;
+  }
+
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const ctxid = await getContextId();
+    if (!ctxid) {
+      continue;
+    }
+    const init = await getCaptcha(ctxid);
+    if (!init || init.type !== "init") {
+      continue;
+    }
+    await validate(ctxid, init.type, "", "", 0);
+    const slide = await getCaptcha(ctxid);
+    if (!slide || !slide.info || !slide.info.static_servers || !slide.info.bg || !slide.info.slice) {
+      continue;
+    }
+    const captchaUrl = `https://${slide.info.static_servers[0]}/${slide.info.bg}`;
+    const sliderUrl = `https://${slide.info.static_servers[0]}/${slide.info.slice}`;
+    const result = await getSliderTrace(captchaUrl, sliderUrl);
+    const baseDistance = Number(result.distance);
+    const distanceCandidates = [baseDistance, baseDistance - 2, baseDistance - 1, baseDistance + 1, baseDistance + 2]
+      .filter((x) => Number.isFinite(x) && x >= 0);
+    for (const distance of distanceCandidates) {
+      const trace = String(result.trace || "").replace(`,${baseDistance},`, `,${distance},`);
+      const times = String(trace).split(",");
+      const total = times[times.length - 1];
+      const check = await validate(ctxid, slide.type, trace, String(distance), total);
+      if (!(check && check.returnCode === "0" && check.data && check.data.validate)) {
+        continue;
+      }
+      await valid(ctxid, check.data.validate);
+      await new Promise((r) => setTimeout(r, 300));
+      const after = await checkBlocked();
+      if (after.ok && after.blocked === false) {
+        console.log(JSON.stringify({ ok: true, action: "unblocked", attempt, distance }));
+        return;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 350));
+  }
+
+  const finalState = await checkBlocked();
+  if (finalState.ok && finalState.blocked === false) {
+    console.log(JSON.stringify({ ok: true, action: "unblocked_after_retry" }));
+    return;
+  }
+  if (!acquireBrowserFallbackLock()) {
+    throw new Error("browser_fallback_locked_by_other_process");
+  }
+  let fb = null;
+  try {
+    fb = await runBrowserFallback();
+  } finally {
+    releaseBrowserFallbackLock();
+  }
+  if (fb.code === 0) {
+    const final2 = await checkBlocked();
+    if (final2.ok && final2.blocked === false) {
+      console.log(JSON.stringify({ ok: true, action: "unblocked_by_browser_fallback", detail: fb.out || null }));
+      return;
+    }
+  }
+  throw new Error(`still_blocked_after_browser_fallback code=${fb.code} stderr=${(fb.err || "").slice(0, 220)}`);
+}
+
+main().catch((err) => {
+  const msg = err && err.message ? String(err.message) : String(err);
+  console.error(msg);
+  process.exitCode = 2;
 });
 

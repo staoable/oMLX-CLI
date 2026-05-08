@@ -19,6 +19,8 @@ export const state = {
   sending: false,
   pendingAttachments: [],
   pendingConfirm: null,
+  activeStreamController: null,
+  sendingSessionId: null,
   currentSessionObservability: {
     executions: [],
     contextInjections: [],

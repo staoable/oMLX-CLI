@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import urllib.error
 import urllib.request
 
@@ -19,6 +20,29 @@ def _get(url: str, timeout: float = 15.0) -> int:
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         _ = resp.read(512)
         return int(resp.status)
+
+
+def _request_json(
+    url: str,
+    *,
+    method: str,
+    payload: dict | None = None,
+    timeout: float = 15.0,
+) -> tuple[int, dict]:
+    body = None
+    headers: dict[str, str] = {}
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, method=method.upper(), data=body, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read(4096).decode("utf-8", errors="replace")
+        if not raw:
+            return int(resp.status), {}
+        try:
+            return int(resp.status), json.loads(raw)
+        except json.JSONDecodeError:
+            return int(resp.status), {"_raw": raw}
 
 
 def main() -> None:
@@ -41,6 +65,32 @@ def main() -> None:
             print(f"FAIL {url} status={code}", file=sys.stderr)
             raise SystemExit(1)
         print(f"OK {code} {url}")
+
+    # 写路径最小冒烟：POST -> PATCH -> DELETE 会话。
+    post_url = f"{base}/api/sessions"
+    code, data = _request_json(post_url, method="POST", payload={"title": "smoke-http-write"})
+    if code >= 400:
+        print(f"FAIL {post_url} status={code}", file=sys.stderr)
+        raise SystemExit(1)
+    sid = str(data.get("id") or "").strip()
+    if not sid:
+        print(f"FAIL {post_url} missing session id in response", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK {code} {post_url} id={sid}")
+
+    patch_url = f"{base}/api/sessions/{sid}"
+    code, _ = _request_json(patch_url, method="PATCH", payload={"archived": True})
+    if code >= 400:
+        print(f"FAIL {patch_url} status={code}", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK {code} {patch_url}")
+
+    del_url = f"{base}/api/sessions/{sid}"
+    code, _ = _request_json(del_url, method="DELETE")
+    if code >= 400:
+        print(f"FAIL {del_url} status={code}", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK {code} {del_url}")
     print("smoke_http: all checks passed", file=sys.stderr)
 
 

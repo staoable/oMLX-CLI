@@ -1107,6 +1107,51 @@ class SessionStore:
                 vals,
             )
 
+    def update_claude_job_if_status(
+        self,
+        job_id: str,
+        *,
+        expect_status: str,
+        status: str | None = None,
+        pid: int | None = None,
+        exit_code: int | None = None,
+        error_summary: str | None = None,
+        result_summary: str | None = None,
+        claude_session_id: str | None = None,
+    ) -> bool:
+        fields: list[str] = []
+        vals: list[Any] = []
+        if status is not None:
+            fields.append("status = ?")
+            vals.append(status)
+        if pid is not None:
+            fields.append("pid = ?")
+            vals.append(pid)
+        if exit_code is not None:
+            fields.append("exit_code = ?")
+            vals.append(exit_code)
+        if error_summary is not None:
+            fields.append("error_summary = ?")
+            vals.append(error_summary)
+        if result_summary is not None:
+            fields.append("result_summary = ?")
+            vals.append(result_summary)
+        if claude_session_id is not None:
+            fields.append("claude_session_id = ?")
+            vals.append(claude_session_id)
+        if not fields:
+            return False
+        now = _now_iso()
+        fields.append("updated_at = ?")
+        vals.append(now)
+        vals.extend([job_id, expect_status])
+        with self._conn() as conn:
+            cur = conn.execute(
+                f"UPDATE claude_jobs SET {', '.join(fields)} WHERE id = ? AND status = ?",
+                vals,
+            )
+            return int(cur.rowcount or 0) > 0
+
     def get_claude_job(self, job_id: str) -> dict[str, Any]:
         with self._conn() as conn:
             row = conn.execute("SELECT * FROM claude_jobs WHERE id = ?", (job_id,)).fetchone()

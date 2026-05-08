@@ -127,6 +127,26 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertIn("event: delta", raw)
         self.assertIn("event: done", raw)
 
+    def test_send_message_stream_exception_yields_error_event(self) -> None:
+        created = self.client.post("/api/sessions", json={"title": "SSE异常测试"})
+        sid = created.json()["id"]
+
+        def bad_stream_reply(**_kwargs):
+            raise RuntimeError("boom")
+            yield {}  # pragma: no cover
+
+        self.app_module.engine.stream_reply = bad_stream_reply
+        with self.client.stream(
+            "POST",
+            f"/api/sessions/{sid}/messages",
+            json={"content": "你好"},
+            headers={"x-request-id": "test-rid-stream-err"},
+        ) as resp:
+            self.assertEqual(resp.status_code, 200)
+            raw = "".join(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk for chunk in resp.iter_raw())
+        self.assertIn("event: error", raw)
+        self.assertIn("会话流异常", raw)
+
     def test_error_shape_contains_error_code_and_request_id(self) -> None:
         bad = self.client.get("/api/sessions/not-exist")
         self.assertEqual(bad.status_code, 404)

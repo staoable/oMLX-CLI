@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import threading
 import time
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
 from webapi.claude_job_service import ClaudeJobService
 from webapi.session_store import SessionStore
@@ -74,6 +76,28 @@ class ClaudeJobServiceRecoveryTest(unittest.TestCase):
         row = self.svc.get_job(self.session.id, jid)
         self.assertEqual(row["status"], "failed")
         self.assertEqual(row["exit_code"], 1)
+
+    def test_recover_stale_running_telemetry_export_warning_to_completed(self) -> None:
+        jid = uuid.uuid4().hex
+        (self.jobs_root / jid).mkdir(parents=True, exist_ok=True)
+        (self.jobs_root / jid / "run.log").write_text(
+            "Error: 1P event logging: 3 events failed to export\n"
+            "Error: Failed to export 3 events\n",
+            encoding="utf-8",
+        )
+        self.store.create_claude_job(
+            job_id=jid,
+            session_id=self.session.id,
+            workspace_path=self.session.workspace_path,
+            prompt="p",
+            status="running",
+            pid=999999,
+            log_relpath=f"{jid}/run.log",
+        )
+        row = self.svc.get_job(self.session.id, jid)
+        self.assertEqual(row["status"], "completed")
+        self.assertEqual(row["exit_code"], 0)
+        self.assertEqual(row["error_summary"], "stale_running_telemetry_export_warning")
 
     def test_start_next_queued_is_serialized(self) -> None:
         j1 = uuid.uuid4().hex
@@ -158,6 +182,89 @@ class ClaudeJobServiceRecoveryTest(unittest.TestCase):
         text = self.svc.tail_logs(self.session.id, jid, tail_lines=20)
         self.assertIn("TAIL_MARKER", text)
         self.assertLessEqual(log_path.stat().st_size, 300000)
+
+    def test_spawn_exception_persists_terminal_message(self) -> None:
+        jid = uuid.uuid4().hex
+        (self.jobs_root / jid).mkdir(parents=True, exist_ok=True)
+        self.store.create_claude_job(
+            job_id=jid,
+            session_id=self.session.id,
+            workspace_path=self.session.workspace_path,
+            prompt="p",
+            context_mode="continue",
+            max_turns=12,
+            status="queued",
+            pid=None,
+            log_relpath=f"{jid}/run.log",
+        )
+        with mock.patch.object(subprocess, "Popen", side_effect=RuntimeError("boom")):
+            out = self.svc._spawn_job_process(
+                job_id=jid,
+                session_id=self.session.id,
+                workspace_path=self.session.workspace_path,
+                prompt="p",
+                max_turns=12,
+                context_mode="continue",
+            )
+        self.assertFalse(out["ok"])
+        row = self.store.get_claude_job(jid)
+        self.assertEqual(row["status"], "failed")
+        msgs = self.store.list_messages(self.session.id, limit=200)
+        self.assertTrue(any("Claude 任务" in str(m.get("content") or "") for m in msgs))
+        self.assertTrue(any(f"claude_job_event:{jid}:failed" in str(m.get("content") or "") for m in msgs))
+
+    def test_wait_exception_persists_terminal_message(self) -> None:
+        jid = uuid.uuid4().hex
+        (self.jobs_root / jid).mkdir(parents=True, exist_ok=True)
+        self.store.create_claude_job(
+            job_id=jid,
+            session_id=self.session.id,
+            workspace_path=self.session.workspace_path,
+            prompt="p",
+            context_mode="continue",
+            max_turns=12,
+            status="running",
+            pid=12345,
+            log_relpath=f"{jid}/run.log",
+        )
+
+        class _BadProc:
+            def wait(self) -> int:
+                raise RuntimeError("wait failed")
+
+        self.svc._wait_and_finalize(jid, _BadProc())  # type: ignore[arg-type]
+        row = self.store.get_claude_job(jid)
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("wait_error", row["error_summary"])
+        msgs = self.store.list_messages(self.session.id, limit=200)
+        self.assertTrue(any("Claude 任务" in str(m.get("content") or "") for m in msgs))
+        self.assertTrue(any(f"claude_job_event:{jid}:failed" in str(m.get("content") or "") for m in msgs))
+
+    def test_conditional_transition_does_not_overwrite_non_running(self) -> None:
+        jid = uuid.uuid4().hex
+        (self.jobs_root / jid).mkdir(parents=True, exist_ok=True)
+        self.store.create_claude_job(
+            job_id=jid,
+            session_id=self.session.id,
+            workspace_path=self.session.workspace_path,
+            prompt="p",
+            context_mode="continue",
+            max_turns=8,
+            status="completed",
+            pid=None,
+            log_relpath=f"{jid}/run.log",
+        )
+        changed = self.svc._transition_terminal_from_status(  # type: ignore[attr-defined]
+            job_id=jid,
+            expect_status="running",
+            status="failed",
+            exit_code=1,
+            error_summary="should_not_apply",
+            report_text="",
+        )
+        self.assertFalse(changed)
+        row = self.store.get_claude_job(jid)
+        self.assertEqual(row["status"], "completed")
 
 
 if __name__ == "__main__":

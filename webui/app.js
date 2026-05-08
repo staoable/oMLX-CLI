@@ -159,22 +159,205 @@ function renderMessageAttachments(container, attachments) {
   }
 }
 
-function appendAssistantMessage(text, { error = false, metrics = null } = {}) {
+function _toTs(isoText) {
+  const t = Date.parse(String(isoText || ""));
+  return Number.isFinite(t) ? t : 0;
+}
+
+function buildAssistantExecutionBuckets(messages, executions) {
+  const sortedExecs = [...(executions || [])].sort(
+    (a, b) => _toTs(a.created_at) - _toTs(b.created_at)
+  );
+  const buckets = new Map();
+  const assistantIds = [];
+  const orphan = [];
+  let idx = 0;
+  for (const m of messages || []) {
+    if (m.role !== "assistant") continue;
+    assistantIds.push(m.id);
+    const msgTs = _toTs(m.created_at);
+    const arr = [];
+    while (idx < sortedExecs.length) {
+      const e = sortedExecs[idx];
+      const eTs = _toTs(e.created_at);
+      if (msgTs > 0 && eTs > msgTs) break;
+      arr.push(e);
+      idx += 1;
+    }
+    buckets.set(m.id, arr);
+  }
+  if (idx < sortedExecs.length) {
+    if (assistantIds.length) {
+      const lastId = assistantIds[assistantIds.length - 1];
+      const tail = buckets.get(lastId) || [];
+      while (idx < sortedExecs.length) {
+        tail.push(sortedExecs[idx]);
+        idx += 1;
+      }
+      buckets.set(lastId, tail);
+    } else {
+      while (idx < sortedExecs.length) {
+        orphan.push(sortedExecs[idx]);
+        idx += 1;
+      }
+    }
+  }
+  return { buckets, orphan };
+}
+
+function renderExecutionHistory(executions) {
+  const list = Array.isArray(executions) ? executions : [];
+  if (!list.length) return "";
+  const rows = list
+    .map((r) => {
+      const cmd = escapeHtml(String(r.command || ""));
+      const status = escapeHtml(String(r.status || "-"));
+      const type = escapeHtml(String(r.exec_type || "-"));
+      const exit = escapeHtml(String(r.exit_code ?? "-"));
+      const when = escapeHtml(formatIsoToLocal(r.created_at) || "-");
+      const duration = Number(r.duration_ms || 0);
+      const d = duration > 0 ? `${duration.toFixed(1)}ms` : "-";
+      const reason = String(r.reason || "").trim();
+      const stdout = escapeHtml(String(r.stdout || "(empty)"));
+      const stderr = escapeHtml(String(r.stderr || "(empty)"));
+      return `
+        <div class="message-exec-history__item">
+          <div class="message-exec-history__head">
+            <span>${type} · ${status} · exit=${exit}</span>
+            <span>${when}</span>
+          </div>
+          <div class="message-exec-history__cmd">$ ${cmd}</div>
+          <div class="message-exec-history__meta">duration=${escapeHtml(d)}${reason ? ` · reason=${escapeHtml(reason)}` : ""}</div>
+          <details class="message-exec-history__detail">
+            <summary>输出详情</summary>
+            <pre>stdout:\n${stdout}\n\nstderr:\n${stderr}</pre>
+          </details>
+        </div>
+      `;
+    })
+    .join("");
+  return `
+    <details class="message-exec-history" open>
+      <summary class="message-exec-history__summary">执行过程（${list.length} 条）</summary>
+      <div class="message-exec-history__list">${rows}</div>
+    </details>
+  `;
+}
+
+function renderOrphanExecutionCard(executions) {
+  if (!Array.isArray(executions) || !executions.length) return;
+  appendAssistantMessage("执行过程已产生，但最终回答尚未落库（可能仍在运行或被中断）。", {
+    metrics: null,
+    execHistory: executions,
+  });
+}
+
+function detectUnblockStateFromText(text) {
+  const s = String(text || "");
+  if (!s || !/"unblock"\s*:/.test(s)) return null;
+  const statusMatch = s.match(/"status"\s*:\s*"([^"]+)"/);
+  const msgMatch = s.match(/"message"\s*:\s*"([^"]+)"/);
+  const blockedMatch = s.match(/"check_blocked"\s*:\s*(true|false|null)/);
+  const runningMatch = s.match(/"running"\s*:\s*(true|false)/);
+  const rcMatch = s.match(/"returncode"\s*:\s*(-?\d+)/);
+  const rawStatus = String((statusMatch && statusMatch[1]) || "").toLowerCase();
+  const running = runningMatch ? runningMatch[1] === "true" : false;
+  const blockedRaw = blockedMatch ? blockedMatch[1] : "";
+  const blocked = blockedRaw === "true" ? true : blockedRaw === "false" ? false : null;
+  let level = "neutral";
+  let label = "解封状态";
+  if (rawStatus === "success" || blocked === false) {
+    level = "ok";
+    label = "已解封";
+  } else if (rawStatus === "running" || running) {
+    level = "running";
+    label = "解封中";
+  } else if (rawStatus === "failed" || blocked === true) {
+    level = "bad";
+    label = "未解封";
+  } else if (rawStatus === "timeout") {
+    level = "warn";
+    label = "解封超时";
+  }
+  const msg = msgMatch ? msgMatch[1] : "";
+  const rc = rcMatch ? Number(rcMatch[1]) : null;
+  return { level, label, msg, blocked, rc };
+}
+
+function renderUnblockBadge(info) {
+  if (!info) return "";
+  const blockedText = info.blocked === true ? "check: blocked=true" : info.blocked === false ? "check: blocked=false" : "check: unknown";
+  const codeText = Number.isFinite(info.rc) ? ` · rc=${info.rc}` : "";
+  const msg = info.msg ? ` · ${escapeHtml(info.msg)}` : "";
+  let fixCmd = "";
+  const lowMsg = String(info.msg || "").toLowerCase();
+  if (lowMsg.includes("playwright_missing")) {
+    fixCmd = "pip install playwright && python -m playwright install chromium";
+  } else if (lowMsg.includes("python3_unavailable")) {
+    fixCmd = "python3 --version";
+  }
+  const fixBtn = fixCmd
+    ? `<button type="button" class="unblock-fix-btn" data-fix-cmd="${escapeHtml(fixCmd)}" aria-label="复制修复命令">复制修复命令</button>`
+    : "";
+  return `<div class="message-unblock-badge message-unblock-badge--${info.level}"><strong>${escapeHtml(info.label)}</strong><span>${blockedText}${codeText}${msg}</span>${fixBtn}</div>`;
+}
+
+function appendAssistantMessage(text, { error = false, metrics = null, execHistory = [] } = {}) {
   const article = document.createElement("article");
   article.className = error
     ? "message message--assistant message--error"
     : "message message--assistant";
   article.setAttribute("aria-label", error ? "错误" : "助手消息");
   const footer = !error && metrics ? renderMetricsFooter(metrics) : "";
+  const execBlock = !error ? renderExecutionHistory(execHistory) : "";
+  const unblockInfo = !error ? detectUnblockStateFromText(text) : null;
+  const unblockBlock = !error ? renderUnblockBadge(unblockInfo) : "";
   const bodyMd = error ? `<p>${escapeHtml(text)}</p>` : renderMarkdown(text);
+  const copyBtn = !error ? '<button type="button" class="message-copy-btn" aria-label="复制本条 AI 消息">复制</button>' : "";
   article.innerHTML = `
     <div class="message__avatar" aria-hidden="true">${error ? "!" : "AI"}</div>
     <div class="message__bubble">
+      ${copyBtn}
+      ${unblockBlock}
       <div class="markdown-body">${bodyMd}</div>
+      ${execBlock}
       ${footer}
     </div>
   `;
   el("chatList").appendChild(article);
+  const copy = article.querySelector(".message-copy-btn");
+  if (copy) {
+    copy.addEventListener("click", async () => {
+      const md = article.querySelector(".markdown-body");
+      const plain = (md?.innerText || "").trim();
+      if (!plain) return;
+      try {
+        await navigator.clipboard.writeText(plain);
+        copy.textContent = "已复制";
+      } catch {
+        copy.textContent = "复制失败";
+      }
+      setTimeout(() => {
+        copy.textContent = "复制";
+      }, 1600);
+    });
+  }
+  const fixBtn = article.querySelector(".unblock-fix-btn");
+  if (fixBtn) {
+    fixBtn.addEventListener("click", async () => {
+      const cmd = fixBtn.getAttribute("data-fix-cmd") || "";
+      if (!cmd) return;
+      try {
+        await navigator.clipboard.writeText(cmd);
+        fixBtn.textContent = "已复制命令";
+      } catch {
+        fixBtn.textContent = "复制失败";
+      }
+      setTimeout(() => {
+        fixBtn.textContent = "复制修复命令";
+      }, 1800);
+    });
+  }
   if (!error) enhanceCodeBlocks(article.querySelector(".markdown-body"));
   scrollChatToBottom();
 }
@@ -347,6 +530,7 @@ function renderSessions() {
   const list = el("sessionList");
   list.innerHTML = "";
   state.sessions.forEach((s) => {
+    const isRunning = state.sending && state.sendingSessionId && s.id === state.sendingSessionId;
     const row = document.createElement("div");
     row.className =
       "session-row" +
@@ -357,7 +541,9 @@ function renderSessions() {
     const main = document.createElement("button");
     main.type = "button";
     main.className = "session-main";
-    main.innerHTML = `<span class="session-title">${escapeHtml(s.title)}</span><span class="session-meta">${escapeHtml(s.model)}</span>`;
+    main.innerHTML = `<span class="session-title">${escapeHtml(s.title)}${
+      isRunning ? '<span class="session-running-badge" title="该会话正在生成中">进行中</span>' : ""
+    }</span><span class="session-meta">${escapeHtml(s.model)}</span>`;
     main.onclick = () => selectSession(s.id);
 
     const del = document.createElement("button");
@@ -797,9 +983,12 @@ async function selectSession(sessionId) {
   renderObservabilityPanel();
   el("chatTitle").textContent = data.title || "会话";
   el("chatList").innerHTML = "";
+  const execBucketsPack = buildAssistantExecutionBuckets(data.messages || [], data.executions || []);
   if (!data.messages.length) {
     renderEmptyHint();
+    renderOrphanExecutionCard(execBucketsPack.orphan);
   } else {
+    const execBuckets = execBucketsPack.buckets;
     data.messages.forEach((m) => {
       if (m.role === "user") {
         const article = appendUserMessage(m.content);
@@ -807,9 +996,13 @@ async function selectSession(sessionId) {
       } else if (m.kind === "error") {
         appendAssistantMessage(m.content, { error: true });
       } else {
-        appendAssistantMessage(m.content, { metrics: m.metrics || null });
+        appendAssistantMessage(m.content, {
+          metrics: m.metrics || null,
+          execHistory: execBuckets.get(m.id) || [],
+        });
       }
     });
+    renderOrphanExecutionCard(execBucketsPack.orphan);
   }
   state.sessionApiBaseFromServer = data.api_base || "";
   state.effectiveApiBase = data.api_base || "";
@@ -961,6 +1154,7 @@ async function sendMessage() {
   el("messageInput").value = "";
   resizeComposer();
   state.assistantBuffer = "";
+  state.sendingSessionId = state.currentSessionId;
 
   setSending(true);
   beginAssistantStream();
@@ -973,14 +1167,21 @@ async function sendMessage() {
         const data_url = await fileToDataUrl(a.file);
         encoded.push({ name: a.name, mime: a.mime, size: a.size, data_url });
       }
+      const controller = new AbortController();
+      state.activeStreamController = controller;
       res = await fetch(resolveApiUrl(`/api/sessions/${state.currentSessionId}/messages`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content, attachments: encoded }),
+        signal: controller.signal,
       });
     } catch (err) {
       removeStreamingPlaceholder();
-      appendAssistantMessage(`网络错误: ${formatApiError(err)}`, { error: true });
+      if (err && (err.name === "AbortError" || String(err).includes("switch_session"))) {
+        appendAssistantMessage("已中断本次回复。", { error: true });
+      } else {
+        appendAssistantMessage(`网络错误: ${formatApiError(err)}`, { error: true });
+      }
       return;
     }
     if (!res.ok) {
@@ -1025,6 +1226,8 @@ async function sendMessage() {
       await loadSessions();
     }
   } finally {
+    state.activeStreamController = null;
+    state.sendingSessionId = null;
     setSending(false);
     el("messageInput").focus();
   }
@@ -1096,6 +1299,7 @@ function closeDebugModal() {
 let claudeJobsPollTimer = null;
 let claudeJobsSelectedId = null;
 let claudeJobsBackgroundPollTimer = null;
+const claudeSessionRefreshTimers = new Map();
 const claudeJobStatusSeen = new Map();
 const claudeJobAnnounced = new Set();
 const appBootAtMs = Date.now();
@@ -1106,6 +1310,28 @@ function _claudeJobSeenKey(sessionId, jobId) {
 
 function _isClaudeJobTerminal(status) {
   return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function scheduleClaudeSessionRefresh(sessionId, delayMs = 700) {
+  if (!sessionId) return;
+  const key = String(sessionId);
+  const old = claudeSessionRefreshTimers.get(key);
+  if (old) clearTimeout(old);
+  const timer = setTimeout(async () => {
+    claudeSessionRefreshTimers.delete(key);
+    if (state.currentSessionId !== key) return;
+    if (state.sending) {
+      // 输入中先不打断，继续递延一次，避免用户正在交互时漏刷新。
+      scheduleClaudeSessionRefresh(key, 900);
+      return;
+    }
+    try {
+      await selectSession(key);
+    } catch {
+      /* keep silent; polling/toast path will surface status changes */
+    }
+  }, delayMs);
+  claudeSessionRefreshTimers.set(key, timer);
 }
 
 function claudeStatusLabel(status) {
@@ -1192,52 +1418,12 @@ async function announceClaudeJobTransition(sessionId, jobId, status) {
   if (claudeJobAnnounced.has(key)) return;
   claudeJobAnnounced.add(key);
   try {
-    const d = await api(
-      `/api/sessions/${encodeURIComponent(sessionId)}/claude-jobs/${encodeURIComponent(jobId)}`
-    );
-    const job = d.job || {};
-    let fullLogText = "";
-    try {
-      const lg = await api(
-        `/api/sessions/${encodeURIComponent(sessionId)}/claude-jobs/${encodeURIComponent(jobId)}/logs?tail=5000`
-      );
-      fullLogText = String(lg?.text || "");
-    } catch {
-      /* ignore logs fetch error and fallback to summary */
-    }
-    const exitCode = job.exit_code;
-    const summary = String(job.result_summary || "").trim();
-    const report = (fullLogText || summary || "").trim();
-    const err = String(job.error_summary || "").trim();
-    let text = "";
-    if (status === "completed") {
-      text = `Claude 任务 ${jobId.slice(0, 8)}… 已完成（exit_code=${exitCode ?? 0}）。`;
-      if (report) {
-        text += `\n完整报告：\n${report}`;
-      }
-    } else if (status === "failed") {
-      text = `Claude 任务 ${jobId.slice(0, 8)}… 执行失败（exit_code=${exitCode ?? "-"})。`;
-      if (err) {
-        text += `\n错误摘要：${err}`;
-      }
-      if (report) {
-        text += `\n完整报告：\n${report}`;
-      }
-    } else {
-      text = `Claude 任务 ${jobId.slice(0, 8)}… 已取消。`;
-      if (err) {
-        text += `\n原因：${err}`;
-      }
-      if (report) {
-        text += `\n任务输出：\n${report}`;
-      }
-    }
-    text += `\n如需完整输出，可查看「Claude 任务」面板或调用 claude_job_logs('${jobId}', tail_lines=200)。`;
-    appendAssistantMessage(text, { error: status === "failed" });
+    // B 方案：终态消息由后端写入会话消息表，前端只刷新会话，避免“切换后丢失”。
+    if (state.currentSessionId === sessionId) scheduleClaudeSessionRefresh(sessionId, 120);
   } catch (e) {
-    appendAssistantMessage(
-      `Claude 任务 ${jobId.slice(0, 8)}… 状态变更为 ${status}，但读取详情失败：${formatApiError(e)}`,
-      { error: true }
+    showToast(
+      `Claude 任务 ${jobId.slice(0, 8)}… 状态已更新（${status}），但会话刷新失败：${formatApiError(e)}`,
+      "error"
     );
   }
 }
