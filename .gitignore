@@ -30,6 +30,9 @@ sessions.db
 # --- 多模态/视频抽帧本地缓存（运行时生成，勿入库）---
 .omlxcli/cache/
 
+# --- 东财解封子进程跨进程锁（运行时生成）---
+.omlxcli/skills/_eastmoney_unblock/*.lock
+
 # --- Python ---
 __pycache__/
 .omlxcli/**/__pycache__/
