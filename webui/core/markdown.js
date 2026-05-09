@@ -72,7 +72,8 @@ function renderMetricsFooter(metrics) {
   const total = metrics.total_tokens_est;
   const inp = metrics.input_tokens_est ?? "—";
   const out = metrics.output_tokens_est ?? "—";
-  return `<div class="message-metrics" role="status"><strong>本回复</strong> · 首 token <strong>${ttft}</strong> · 约 <strong>${tps}</strong> token/s · 总约 <strong>${total}</strong> tokens（输入≈${inp} · 输出≈${out}，估算值）</div>`;
+  const tokenSource = metrics.tokens_source === "usage" ? "真实值（上游 usage）" : "估算值";
+  return `<div class="message-metrics" role="status"><strong>本回复</strong> · 首 token <strong>${ttft}</strong> · 约 <strong>${tps}</strong> token/s · 总约 <strong>${total}</strong> tokens（输入≈${inp} · 输出≈${out}，${tokenSource}）</div>`;
 }
 
 function enhanceCodeBlocks(root) {

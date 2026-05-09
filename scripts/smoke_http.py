@@ -22,6 +22,17 @@ def _get(url: str, timeout: float = 15.0) -> int:
         return int(resp.status)
 
 
+def _get_json(url: str, timeout: float = 15.0, max_bytes: int = 262144) -> tuple[int, dict]:
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        status = int(resp.status)
+        raw = resp.read(max_bytes).decode("utf-8", errors="replace")
+    try:
+        return status, json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        return status, {"_raw": raw[:500]}
+
+
 def _request_json(
     url: str,
     *,
@@ -65,6 +76,20 @@ def main() -> None:
             print(f"FAIL {url} status={code}", file=sys.stderr)
             raise SystemExit(1)
         print(f"OK {code} {url}")
+
+    diag_url = f"{base}/api/diagnostics"
+    try:
+        dcode, ddata = _get_json(diag_url)
+    except urllib.error.HTTPError as exc:
+        print(f"FAIL {diag_url} HTTP {exc.code}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    except OSError as exc:
+        print(f"FAIL {diag_url} {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    if dcode >= 400 or not isinstance(ddata, dict) or "python" not in ddata:
+        print(f"FAIL {diag_url} status={dcode} body_keys={list(ddata)[:8]}", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK {dcode} {diag_url}")
 
     # 写路径最小冒烟：POST -> PATCH -> DELETE 会话。
     post_url = f"{base}/api/sessions"

@@ -2,6 +2,7 @@ import {
   DEFAULT_MODEL,
   SIDEBAR_STORAGE_KEY,
   ARCHIVED_SESSIONS_KEY,
+  ONBOARDING_DISMISSED_KEY,
   state,
   el,
 } from "/ui/core/state.js";
@@ -541,7 +542,7 @@ function renderSessions() {
     const main = document.createElement("button");
     main.type = "button";
     main.className = "session-main";
-    main.innerHTML = `<span class="session-title">${escapeHtml(s.title)}${
+    main.innerHTML = `<span class="session-title"><span class="session-title__text">${escapeHtml(s.title)}</span>${
       isRunning ? '<span class="session-running-badge" title="该会话正在生成中">进行中</span>' : ""
     }</span><span class="session-meta">${escapeHtml(s.model)}</span>`;
     main.onclick = () => selectSession(s.id);
@@ -650,6 +651,17 @@ function setVendorFormHint(text) {
   if (n) n.textContent = text || "";
 }
 
+function setVendorModelSuggestions(models) {
+  const dl = el("vendorFormDefaultModelList");
+  if (!dl) return;
+  dl.innerHTML = "";
+  for (const id of [...new Set((models || []).filter(Boolean))]) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    dl.appendChild(opt);
+  }
+}
+
 /** 密码型输入在部分浏览器中需先失焦再读，才能拿到刚粘贴/输入的值。 */
 async function readVendorApiKeyTrimmed() {
   const keyEl = el("vendorFormApiKey");
@@ -666,11 +678,8 @@ function clearVendorForm() {
   el("vendorFormName").value = "";
   el("vendorFormApiBase").value = "";
   el("vendorFormApiKey").value = "";
-  el("vendorFormDefaultModel").innerHTML = "";
-  const o = document.createElement("option");
-  o.value = "";
-  o.textContent = "（请先下载模型列表）";
-  el("vendorFormDefaultModel").appendChild(o);
+  el("vendorFormDefaultModel").value = "";
+  setVendorModelSuggestions([]);
   const ck = el("vendorFormDefaultVendor");
   if (ck) ck.checked = false;
   setVendorFormHint("");
@@ -686,6 +695,9 @@ async function renderVendorList() {
   } catch {
     fetchFailed = true;
     list = [];
+  }
+  if (!fetchFailed) {
+    state.vendorCount = list.length;
   }
   mount.innerHTML = "";
   if (!list.length) {
@@ -738,6 +750,7 @@ async function renderVendorList() {
         setVendorFormHint("已删除。");
         await renderVendorList();
         await fillSessionVendorSelect(state.currentVendorId);
+        refreshEmptyHintIfNeeded();
       } catch (e) {
         setVendorFormHint(`删除失败：${formatApiError(e)}`);
       }
@@ -752,21 +765,9 @@ async function loadVendorIntoForm(vendorId) {
   el("vendorFormName").value = v.name || "";
   el("vendorFormApiBase").value = v.api_base || "";
   el("vendorFormApiKey").value = v.api_key != null ? String(v.api_key) : "";
-  const sel = el("vendorFormDefaultModel");
-  sel.innerHTML = "";
   const dm = (v.default_model || "").trim();
-  if (dm) {
-    const opt = document.createElement("option");
-    opt.value = dm;
-    opt.textContent = dm;
-    sel.appendChild(opt);
-    sel.value = dm;
-  } else {
-    const o = document.createElement("option");
-    o.value = "";
-    o.textContent = "（请先下载模型列表）";
-    sel.appendChild(o);
-  }
+  el("vendorFormDefaultModel").value = dm;
+  setVendorModelSuggestions(dm ? [dm] : []);
   const ck = el("vendorFormDefaultVendor");
   if (ck) ck.checked = v.id === defaultVendorId;
   setVendorFormHint("");
@@ -807,15 +808,9 @@ async function onVendorProbeClick() {
   try {
     const res = await probeVendor(base, key);
     const models = res.models || [];
-    const sel = el("vendorFormDefaultModel");
-    sel.innerHTML = "";
-    for (const id of models) {
-      const opt = document.createElement("option");
-      opt.value = id;
-      opt.textContent = id;
-      sel.appendChild(opt);
-    }
-    if (models.length) sel.value = models[0];
+    const modelInput = el("vendorFormDefaultModel");
+    setVendorModelSuggestions(models);
+    if (models.length && !(modelInput.value || "").trim()) modelInput.value = models[0];
     setVendorFormHint(`已获取 ${models.length} 个模型。默认已选第一项，可修改后保存模型设置。`);
   } catch (e) {
     setVendorFormHint(`下载模型列表失败：${formatApiError(e)}`);
@@ -877,8 +872,16 @@ async function onVendorSaveRecordClick() {
     await fillSessionVendorSelect(state.currentVendorId);
     clearVendorForm();
     setVendorFormHint(hintAfter);
+    refreshEmptyHintIfNeeded();
   } catch (e) {
     setVendorFormHint(`保存失败：${formatApiError(e)}`);
+  }
+}
+
+function refreshEmptyHintIfNeeded() {
+  const thread = el("chatList");
+  if (thread?.querySelector(".thread-empty")) {
+    renderEmptyHint();
   }
 }
 
@@ -890,8 +893,86 @@ function renderEmptyHint() {
   div.innerHTML =
     "<strong>开始对话</strong>" +
     "在页面<strong>最下方输入框</strong>输入内容，Enter 发送，Shift+Enter 换行。" +
-    '<span class="thread-empty__sub">需要改模型、模型设置或工作目录时点顶部「设置」；排查执行与上下文时点「调试」。</span>';
+    '<span class="thread-empty__sub">需要改模型、模型设置或工作目录时点顶部「设置」；排查执行与上下文时点「调试」。' +
+    (state.vendorCount === 0
+      ? ' <button type="button" class="btn btn--ghost btn--inline thread-empty__guide" id="emptyOnboardingBtn">入门向导</button>'
+      : "") +
+    "</span>";
   thread.appendChild(div);
+  const guideBtn = el("emptyOnboardingBtn");
+  if (guideBtn) {
+    guideBtn.addEventListener("click", () => {
+      openOnboardingModal();
+    });
+  }
+}
+
+function isOnboardingDismissed() {
+  try {
+    return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function dismissOnboarding() {
+  try {
+    localStorage.setItem(ONBOARDING_DISMISSED_KEY, "1");
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function closeOnboardingModal() {
+  el("onboardingModal").hidden = true;
+}
+
+async function populateOnboardingEnv() {
+  const mount = el("onboardingEnvBody");
+  if (!mount) return;
+  mount.textContent = "加载中…";
+  try {
+    const res = await fetch(resolveApiUrl("/api/diagnostics"));
+    if (!res.ok) {
+      mount.textContent = `无法读取诊断（HTTP ${res.status}）。`;
+      return;
+    }
+    const d = await res.json();
+    const py = d.python || {};
+    const cc = d.claude_code || {};
+    const pw = d.playwright || {};
+    const lines = [
+      `Python ${py.version || "?"} · ${d.platform || "?"}`,
+      `SQLite ${d.sqlite?.reachable ? "可访问" : "不可访问"} · vendors ${d.store?.vendors_count ?? "?"} · sessions ${d.store?.sessions_count ?? "?"}`,
+      `node ${d.node?.on_path ? d.node.version || "ok" : "未找到"} · npm ${d.npm?.on_path ? "ok" : "未找到"}`,
+      `playwright ${pw.import_ok ? `import ${pw.version || "ok"}` : "未安装"}`,
+      `Claude Code ${cc.enabled ? "可用" : "未就绪"}${cc.reason ? ` — ${cc.reason}` : ""}`,
+    ];
+    mount.textContent = lines.join("\n");
+  } catch (e) {
+    mount.textContent = `读取失败：${formatApiError(e)}`;
+  }
+}
+
+function openOnboardingModal() {
+  el("onboardingModal").hidden = false;
+  void populateOnboardingEnv();
+}
+
+async function refreshVendorCount() {
+  try {
+    const vendors = await api("/api/vendors");
+    state.vendorCount = Array.isArray(vendors) ? vendors.length : 0;
+  } catch {
+    state.vendorCount = -1;
+  }
+}
+
+async function maybeShowOnboarding() {
+  await refreshVendorCount();
+  if (state.vendorCount !== 0) return;
+  if (isOnboardingDismissed()) return;
+  openOnboardingModal();
 }
 
 function humanSize(n) {
@@ -954,6 +1035,7 @@ function addFiles(files) {
 }
 
 async function loadSessions() {
+  await refreshVendorCount();
   const q = state.includeArchivedSessions ? "?include_archived=1" : "";
   state.sessions = await api(`/api/sessions${q}`);
   const ids = new Set(state.sessions.map((s) => s.id));
@@ -1599,6 +1681,21 @@ el("vendorsModal").addEventListener("click", (e) => {
   const node = e.target.closest("[data-close-modal]");
   if (node && node.getAttribute("data-close-modal") === "vendors") closeVendorsModal();
 });
+el("onboardingModal").addEventListener("click", (e) => {
+  const node = e.target.closest("[data-close-modal]");
+  if (node && node.getAttribute("data-close-modal") === "onboarding") {
+    dismissOnboarding();
+    closeOnboardingModal();
+  }
+});
+el("onboardingDismissBtn").addEventListener("click", () => {
+  dismissOnboarding();
+  closeOnboardingModal();
+});
+el("onboardingOpenVendorsBtn").addEventListener("click", async () => {
+  closeOnboardingModal();
+  await openVendorsModal();
+});
 el("openVendorsModalBtn").addEventListener("click", () => {
   openVendorsModal();
 });
@@ -1688,6 +1785,12 @@ document.addEventListener("keydown", (e) => {
   if (!el("vendorsModal").hidden) {
     e.preventDefault();
     closeVendorsModal();
+    return;
+  }
+  if (!el("onboardingModal").hidden) {
+    e.preventDefault();
+    dismissOnboarding();
+    closeOnboardingModal();
   }
 });
 
@@ -1740,5 +1843,7 @@ if (archivedToggle) {
     loadSessions();
   });
 }
-loadSessions();
+loadSessions()
+  .then(() => maybeShowOnboarding())
+  .catch(() => {});
 startClaudeJobsBackgroundPolling();

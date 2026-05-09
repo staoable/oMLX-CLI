@@ -35,6 +35,11 @@ class ApiIntegrationTest(unittest.TestCase):
         )
         assert vr.status_code == 200, vr.text
         cls._integration_vendor_id = vr.json()["id"]
+        set_default = cls.client.put(
+            "/api/vendors/default",
+            json={"vendor_id": cls._integration_vendor_id},
+        )
+        assert set_default.status_code == 200, set_default.text
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -53,7 +58,7 @@ class ApiIntegrationTest(unittest.TestCase):
         self.assertEqual(created.status_code, 200)
         payload = created.json()
         sid = payload["id"]
-        self.assertIsNone(payload.get("vendor_id"))
+        self.assertEqual(payload.get("vendor_id"), self.__class__._integration_vendor_id)
 
         got = self.client.get(f"/api/sessions/{sid}")
         self.assertEqual(got.status_code, 200)

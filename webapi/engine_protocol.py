@@ -45,7 +45,13 @@ def extract_assistant_text(obj: dict[str, Any]) -> str:
     choices = obj.get("choices") or []
     if not choices:
         return ""
-    msg = choices[0].get("message") or {}
+    ch0 = choices[0]
+    if not isinstance(ch0, dict):
+        return ""
+    # 传统 /v1/completions 非流式响应
+    if isinstance(ch0.get("text"), str) and ch0.get("text"):
+        return ch0["text"]
+    msg = ch0.get("message") or {}
     content = msg.get("content")
     if isinstance(content, str):
         return content

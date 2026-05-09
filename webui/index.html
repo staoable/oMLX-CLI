@@ -205,8 +205,17 @@
                 <input id="vendorFormApiBase" type="text" class="input" placeholder="https://api.deepseek.com" spellcheck="false" autocomplete="off" />
               </label>
               <label class="field">
-                <span class="field__label">默认模型（下载模型列表后自动填第一项，可改）</span>
-                <select id="vendorFormDefaultModel" class="input input--select"></select>
+                <span class="field__label">默认模型（可直接手填；下载模型列表后可下拉选择）</span>
+                <input
+                  id="vendorFormDefaultModel"
+                  type="text"
+                  class="input"
+                  list="vendorFormDefaultModelList"
+                  placeholder="例如：minimax-m25"
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+                <datalist id="vendorFormDefaultModelList"></datalist>
               </label>
               <label class="field">
                 <span class="field__label">默认供应商</span>
@@ -235,6 +244,60 @@
             </div>
             <p id="vendorFormHint" class="modal__hint" aria-live="polite"></p>
           </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="onboardingModal" class="modal" hidden>
+      <div class="modal__backdrop" data-close-modal="onboarding"></div>
+      <div
+        class="modal__panel modal__panel--onboarding"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="onboardingModalTitle"
+      >
+        <div class="modal__head">
+          <h3 id="onboardingModalTitle">欢迎使用</h3>
+          <button
+            type="button"
+            class="btn btn--ghost btn--icon modal__close"
+            data-close-modal="onboarding"
+            aria-label="关闭"
+          >
+            ×
+          </button>
+        </div>
+        <p class="modal__lede onboarding__lede">
+          首次使用请先完成下方步骤，即可在底部输入框开始对话。密钥仅保存在本机 SQLite，不会写入浏览器。
+        </p>
+        <ol class="onboarding-steps" aria-label="入门步骤">
+          <li class="onboarding-step">
+            <span class="onboarding-step__title">环境初始化（可选）</span>
+            <span class="onboarding-step__body"
+              >若尚未安装依赖，在仓库根目录终端执行 <code class="onboarding-code">./bootstrap.sh</code>（详见
+              README）。</span
+            >
+          </li>
+          <li class="onboarding-step">
+            <span class="onboarding-step__title">添加模型设置</span>
+            <span class="onboarding-step__body"
+              >打开「模型设置」，填写 OpenAI 兼容 <strong>API Base</strong> 与 <strong>API Key</strong>，保存至少一条。</span
+            >
+          </li>
+          <li class="onboarding-step">
+            <span class="onboarding-step__title">本会话选择供应商与模型</span>
+            <span class="onboarding-step__body"
+              >在「设置」中为当前会话选择供应商并刷新模型列表，再选模型后保存。</span
+            >
+          </li>
+        </ol>
+        <div class="onboarding-env" aria-live="polite">
+          <div class="onboarding-env__label">环境摘要（<code>/api/diagnostics</code>）</div>
+          <div id="onboardingEnvBody" class="onboarding-env__body">加载中…</div>
+        </div>
+        <div class="modal__actions onboarding-actions">
+          <button id="onboardingDismissBtn" type="button" class="btn btn--ghost">稍后</button>
+          <button id="onboardingOpenVendorsBtn" type="button" class="btn btn--primary">打开模型设置</button>
         </div>
       </div>
     </div>

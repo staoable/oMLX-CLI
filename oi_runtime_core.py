@@ -12,6 +12,25 @@ from typing import Any, Dict, Generator, Iterable
 
 _RETRY_HTTP = frozenset({429, 502, 503, 504})
 
+# chat = 仅 POST /chat/completions（默认）
+# completions = 仅 POST /completions（将 messages 压成单一 prompt）
+# auto = 先 chat；若整条请求在耗尽重试后仍以 HTTP 404/405/501 失败，再尝试 completions
+_AUTO_FALLBACK_CODES = frozenset({404, 405, 501})
+
+
+def _upstream_protocol() -> str:
+    raw = (os.getenv("OMLXCLI_UPSTREAM_PROTOCOL") or "chat").strip().lower()
+    if raw in ("completion", "completions", "legacy"):
+        return "completions"
+    if raw in ("auto", "try_completions", "try_completions_on_fail"):
+        return "auto"
+    return "chat"
+
+
+def upstream_llm_protocol() -> str:
+    """解析 `OMLXCLI_UPSTREAM_PROTOCOL` 后的取值：chat | completions | auto。"""
+    return _upstream_protocol()
+
 
 def _chat_http_settings(timeout_override: int | None) -> tuple[int, int, float]:
     t = int(os.getenv("OMLXCLI_CHAT_TIMEOUT_SEC", "120")) if timeout_override is None else int(timeout_override)
@@ -123,7 +142,56 @@ def probe_api_base(candidates: Iterable[str], api_key: str, timeout: int = 3) ->
     return None if last_exc is None else ApiProbeResult(api_base="", last_error=str(last_exc))
 
 
-def stream_chat_completions(
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for p in content:
+            if not isinstance(p, dict):
+                continue
+            if p.get("type") == "text" and isinstance(p.get("text"), str):
+                parts.append(p["text"])
+            elif isinstance(p.get("text"), str) and not p.get("type"):
+                parts.append(p["text"])
+        return "\n".join(parts)
+    return ""
+
+
+def completion_prompt_from_messages(messages: list[Dict[str, Any]]) -> str:
+    """将 chat messages 压成单一 prompt，供 /completions 使用（多模态仅保留文本段）。"""
+    lines: list[str] = []
+    for m in messages:
+        role = str(m.get("role") or "user").strip().lower()
+        text = _content_to_text(m.get("content")).strip()
+        if not text:
+            continue
+        lines.append(f"{role.upper()}:\n{text}")
+    return "\n\n".join(lines).strip()
+
+
+def _completions_chunk_as_chat_delta(obj: Dict[str, Any]) -> Dict[str, Any] | None:
+    choices = obj.get("choices") or []
+    if not choices:
+        return None
+    ch0 = choices[0]
+    if not isinstance(ch0, dict):
+        return None
+    piece = ch0.get("text")
+    if isinstance(piece, str) and piece:
+        return {"choices": [{"delta": {"content": piece}}]}
+    return None
+
+
+def _iter_sse_data_lines(resp: Any) -> Generator[str, None, None]:
+    for raw in resp:
+        line = raw.decode("utf-8", errors="ignore").strip()
+        if not line.startswith("data: "):
+            continue
+        yield line[6:]
+
+
+def _stream_chat_completions_impl(
     api_base: str,
     api_key: str,
     model: str,
@@ -157,11 +225,7 @@ def stream_chat_completions(
         )
         try:
             with _urlopen_with_retries(req, timeout=t, max_retries=max_retries, backoff=backoff) as resp:
-                for raw in resp:
-                    line = raw.decode("utf-8", errors="ignore").strip()
-                    if not line.startswith("data: "):
-                        continue
-                    data = line[6:]
+                for data in _iter_sse_data_lines(resp):
                     if data == "[DONE]":
                         break
                     try:
@@ -183,7 +247,125 @@ def stream_chat_completions(
         raise last_model_exc
 
 
-def chat_completion_once(
+def _stream_completions_normalized(
+    api_base: str,
+    api_key: str,
+    model: str,
+    messages: list[Dict[str, Any]],
+    *,
+    temperature: float = 0.2,
+    max_tokens: int | None = None,
+    timeout: int | None = None,
+) -> Generator[Dict[str, Any], None, None]:
+    prompt = completion_prompt_from_messages(messages)
+    if not prompt:
+        raise ValueError("completions 协议需要非空 prompt（messages 无可用文本）")
+    t, max_retries, backoff = _chat_http_settings(timeout)
+    models = _model_chain(model)
+    last_model_exc: urllib.error.HTTPError | None = None
+    for m in models:
+        payload: Dict[str, Any] = {
+            "model": m,
+            "prompt": prompt,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
+        req = urllib.request.Request(
+            url=api_base.rstrip("/") + "/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with _urlopen_with_retries(req, timeout=t, max_retries=max_retries, backoff=backoff) as resp:
+                for data in _iter_sse_data_lines(resp):
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    norm = _completions_chunk_as_chat_delta(obj)
+                    if norm is not None:
+                        yield norm
+            return
+        except urllib.error.HTTPError as exc:
+            try:
+                exc.read()
+            except Exception:  # noqa: BLE001
+                pass
+            if exc.code == 404 and m != models[-1]:
+                last_model_exc = exc
+                continue
+            raise
+    if last_model_exc:
+        raise last_model_exc
+
+
+def stream_chat_completions(
+    api_base: str,
+    api_key: str,
+    model: str,
+    messages: list[Dict[str, Any]],
+    *,
+    temperature: float = 0.2,
+    max_tokens: int | None = None,
+    timeout: int | None = None,
+) -> Generator[Dict[str, Any], None, None]:
+    proto = _upstream_protocol()
+    if proto == "completions":
+        yield from _stream_completions_normalized(
+            api_base,
+            api_key,
+            model,
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+        return
+    if proto == "auto":
+        try:
+            yield from _stream_chat_completions_impl(
+                api_base,
+                api_key,
+                model,
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=timeout,
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code not in _AUTO_FALLBACK_CODES:
+                raise
+            yield from _stream_completions_normalized(
+                api_base,
+                api_key,
+                model,
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=timeout,
+            )
+        return
+    yield from _stream_chat_completions_impl(
+        api_base,
+        api_key,
+        model,
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+    )
+
+
+def _chat_completion_once_impl(
     api_base: str,
     api_key: str,
     model: str,
@@ -231,3 +413,111 @@ def chat_completion_once(
     if last_model_exc:
         raise last_model_exc
     raise RuntimeError("chat_completion_once: no model candidates")
+
+
+def _completion_once_impl(
+    api_base: str,
+    api_key: str,
+    model: str,
+    messages: list[Dict[str, Any]],
+    *,
+    temperature: float = 0.2,
+    max_tokens: int | None = None,
+    timeout: int | None = None,
+) -> Dict[str, Any]:
+    prompt = completion_prompt_from_messages(messages)
+    if not prompt:
+        raise ValueError("completions 协议需要非空 prompt（messages 无可用文本）")
+    t, max_retries, backoff = _chat_http_settings(timeout)
+    models = _model_chain(model)
+    last_model_exc: urllib.error.HTTPError | None = None
+    for m in models:
+        payload: Dict[str, Any] = {
+            "model": m,
+            "prompt": prompt,
+            "temperature": temperature,
+            "stream": False,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
+        req = urllib.request.Request(
+            url=api_base.rstrip("/") + "/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with _urlopen_with_retries(req, timeout=t, max_retries=max_retries, backoff=backoff) as resp:
+                body = resp.read().decode("utf-8", errors="ignore")
+            return json.loads(body)
+        except urllib.error.HTTPError as exc:
+            try:
+                exc.read()
+            except Exception:  # noqa: BLE001
+                pass
+            if exc.code == 404 and m != models[-1]:
+                last_model_exc = exc
+                continue
+            raise
+    if last_model_exc:
+        raise last_model_exc
+    raise RuntimeError("completion_once: no model candidates")
+
+
+def chat_completion_once(
+    api_base: str,
+    api_key: str,
+    model: str,
+    messages: list[Dict[str, Any]],
+    *,
+    temperature: float = 0.2,
+    max_tokens: int | None = None,
+    timeout: int | None = None,
+) -> Dict[str, Any]:
+    proto = _upstream_protocol()
+    if proto == "completions":
+        return _completion_once_impl(
+            api_base,
+            api_key,
+            model,
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+    if proto == "auto":
+        try:
+            return _chat_completion_once_impl(
+                api_base,
+                api_key,
+                model,
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=timeout,
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code not in _AUTO_FALLBACK_CODES:
+                raise
+            return _completion_once_impl(
+                api_base,
+                api_key,
+                model,
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=timeout,
+            )
+    return _chat_completion_once_impl(
+        api_base,
+        api_key,
+        model,
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+    )

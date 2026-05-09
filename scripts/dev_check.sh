@@ -22,3 +22,4 @@ echo "==> unittest"
 "${PY}" -m unittest discover -s tests -p "test_*.py" -v
 
 echo "==> dev_check 完成（未含 uvicorn+smoke_http；与 CI 完全一致请见 .github/workflows/ci.yml）"
+echo "    环境与数据目录自检可执行: ./scripts/doctor.sh 或启动服务后 GET /api/diagnostics"

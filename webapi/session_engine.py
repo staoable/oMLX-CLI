@@ -90,6 +90,52 @@ def _approx_tokens(text: str) -> int:
     return max(1, int(len(text) * 0.45))
 
 
+def _usage_tokens_from_obj(obj: dict[str, Any] | None) -> tuple[int | None, int | None, int | None]:
+    """从上游响应抽取 usage token（兼容缺失字段）。"""
+    if not isinstance(obj, dict):
+        return None, None, None
+    usage = obj.get("usage")
+    if not isinstance(usage, dict):
+        return None, None, None
+
+    def _to_int(v: Any) -> int | None:
+        try:
+            if v is None:
+                return None
+            n = int(v)
+            return n if n >= 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    prompt = _to_int(usage.get("prompt_tokens"))
+    completion = _to_int(usage.get("completion_tokens"))
+    total = _to_int(usage.get("total_tokens"))
+    if total is None and prompt is not None and completion is not None:
+        total = prompt + completion
+    return prompt, completion, total
+
+
+def _merge_usage_into_metrics(
+    *,
+    metrics: dict[str, Any],
+    usage_prompt: int | None,
+    usage_completion: int | None,
+    usage_total: int | None,
+) -> None:
+    """若上游提供 usage token，则覆盖估算值并标记来源。"""
+    if usage_prompt is not None:
+        metrics["input_tokens_est"] = usage_prompt
+    if usage_completion is not None:
+        metrics["output_tokens_est"] = usage_completion
+    if usage_total is not None:
+        metrics["total_tokens_est"] = usage_total
+    elif usage_prompt is not None and usage_completion is not None:
+        metrics["total_tokens_est"] = usage_prompt + usage_completion
+
+    if usage_prompt is not None or usage_completion is not None or usage_total is not None:
+        metrics["tokens_source"] = "usage"
+
+
 def _skill_name_from_expr(expr: str) -> str:
     s = (expr or "").strip()
     m = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", s)
@@ -292,6 +338,9 @@ class OiSessionEngine:
         chunks: list[str] = []
         t0 = time.perf_counter()
         first_token_t: float | None = None
+        usage_prompt: int | None = None
+        usage_completion: int | None = None
+        usage_total: int | None = None
         try:
             stream = stream_chat_completions(
                 api_base=config.api_base,
@@ -302,6 +351,13 @@ class OiSessionEngine:
                 max_tokens=config.max_tokens,
             )
             for obj in stream:
+                p, c, t = _usage_tokens_from_obj(obj)
+                if p is not None:
+                    usage_prompt = p
+                if c is not None:
+                    usage_completion = c
+                if t is not None:
+                    usage_total = t
                 choices = obj.get("choices") or []
                 if not choices:
                     continue
@@ -345,6 +401,12 @@ class OiSessionEngine:
             "output_tokens_est": output_tokens_est,
             "total_tokens_est": total_tokens_est,
         }
+        _merge_usage_into_metrics(
+            metrics=metrics,
+            usage_prompt=usage_prompt,
+            usage_completion=usage_completion,
+            usage_total=usage_total,
+        )
         yield {"type": "metrics", **metrics}
         self.store.add_message(
             session_id=session_id,
@@ -591,6 +653,9 @@ class OiSessionEngine:
         max_rounds = max(1, min(int(os.getenv("OMLXCLI_MAX_EXEC_ROUNDS", "8")), 24))
         final_answer = ""
         executed_any = False
+        usage_prompt: int | None = None
+        usage_completion: int | None = None
+        usage_total: int | None = None
 
         for _ in range(max_rounds):
             try:
@@ -609,6 +674,13 @@ class OiSessionEngine:
             except Exception as exc:  # noqa: BLE001
                 final_answer = f"请求模型失败: {type(exc).__name__}: {exc}"
                 break
+            p, c, t = _usage_tokens_from_obj(obj)
+            if p is not None:
+                usage_prompt = p
+            if c is not None:
+                usage_completion = c
+            if t is not None:
+                usage_total = t
             if first_token_t is None:
                 first_token_t = time.perf_counter()
             assistant_text = strip_model_leak_tokens(extract_assistant_text(obj).strip())
@@ -836,6 +908,13 @@ class OiSessionEngine:
                 elif finalize_text:
                     final_answer = re.sub(r"</?run_shell>", "", finalize_text, flags=re.IGNORECASE)
                     final_answer = re.sub(r"</?run_skill>", "", final_answer, flags=re.IGNORECASE).strip()
+                p, c, t = _usage_tokens_from_obj(finalize_obj)
+                if p is not None:
+                    usage_prompt = p
+                if c is not None:
+                    usage_completion = c
+                if t is not None:
+                    usage_total = t
             except Exception as exc:  # noqa: BLE001
                 # 保底走通，不让一次收敛失败破坏主流程；至少记录可观测日志。
                 log_event(
@@ -869,6 +948,12 @@ class OiSessionEngine:
             "output_tokens_est": output_tokens_est,
             "total_tokens_est": input_tokens_est + output_tokens_est,
         }
+        _merge_usage_into_metrics(
+            metrics=metrics,
+            usage_prompt=usage_prompt,
+            usage_completion=usage_completion,
+            usage_total=usage_total,
+        )
         yield {"type": "metrics", **metrics}
         self.store.add_message(
             session_id=session_id,

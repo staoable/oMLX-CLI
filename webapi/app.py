@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from webapi.context_manager import ContextManager
 from webapi.claude_job_runtime import configure_claude_job_runtime, get_claude_job_service
 from webapi.claude_job_service import claude_code_public_status
+from webapi.diagnostics import build_diagnostics_payload
 from webapi.logging_utils import log_event
 from webapi.session_engine import DEFAULT_SESSION_MODEL_ID, OiSessionEngine
 from webapi.session_store import SessionStore
@@ -313,6 +314,18 @@ def healthz() -> dict[str, str]:
     return {"ok": "true"}
 
 
+@app.get("/api/diagnostics")
+def api_diagnostics() -> dict[str, Any]:
+    """本地环境与数据目录自检 JSON（不含 API Key 等敏感字段）。"""
+    return build_diagnostics_payload(
+        root=ROOT,
+        data_dir=DATA_DIR,
+        db_path=DB_PATH,
+        webui_dir=WEBUI_DIR,
+        default_workspace=DEFAULT_WORKSPACE,
+    )
+
+
 def _fetch_upstream_model_ids(api_base: str, api_key: str) -> tuple[str, list[str]]:
     """请求上游 GET {base}/models，返回 (规范化 base, 模型 id 列表)。"""
     base = (api_base or "").strip().rstrip("/")
@@ -469,6 +482,12 @@ def create_session(req: CreateSessionReq) -> dict[str, Any]:
     api_base = (req.api_base or "").strip().rstrip("/")
     vendor_id: str | None = None
     requested_vendor = (req.vendor_id or "").strip() or store.get_default_vendor_id()
+    if not requested_vendor:
+        # 体验兜底：若用户尚未显式设置默认供应商，且当前仅有一条模型设置，
+        # 新建会话自动绑定该条，避免“创建后仍需手动进入设置绑定”。
+        vendors = store.list_vendors()
+        if len(vendors) == 1:
+            requested_vendor = vendors[0].id
     if requested_vendor:
         try:
             v = store.get_vendor(requested_vendor)
