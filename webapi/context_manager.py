@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from webapi.attachment_mime import effective_attachment_mime
 from webapi.session_store import SessionStore
 
 
@@ -157,7 +158,7 @@ class ContextManager:
             user_content_parts.append({"type": "text", "text": user_input})
         for att in attachments or []:
             data_url = str(att.get("data_url") or "")
-            mime = str(att.get("mime") or "").lower()
+            mime = effective_attachment_mime(att)
             if not data_url:
                 continue
             if mime.startswith("image/"):
@@ -171,11 +172,27 @@ class ContextManager:
                     {"type": "input_audio", "input_audio": {"data": audio_data, "format": mime}}
                 )
             elif mime.startswith("video/"):
-                # video 在 OpenAI 兼容实现中并不统一，先透传为 input_video（若后端支持可直接消费）。
-                video_data = data_url.split(",", 1)[1] if "," in data_url else data_url
-                user_content_parts.append(
-                    {"type": "input_video", "input_video": {"data": video_data, "format": mime}}
-                )
+                # 标准 chat/completions 普遍不支持 input_video；抽帧为 image_url 才能被上游消费。
+                try:
+                    from webapi.video_frames import video_data_url_to_chat_parts
+
+                    user_content_parts.extend(
+                        video_data_url_to_chat_parts(
+                            data_url=data_url,
+                            name=str(att.get("name") or "video"),
+                            mime=mime,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    user_content_parts.append(
+                        {
+                            "type": "text",
+                            "text": (
+                                f"[视频附件处理失败] {att.get('name', 'unknown')}：{exc}\n"
+                                "若需分析视频，请本机安装 ffmpeg/ffprobe，或改用「视频路径 + 终端技能」等流程。"
+                            ),
+                        }
+                    )
             else:
                 user_content_parts.append(
                     {

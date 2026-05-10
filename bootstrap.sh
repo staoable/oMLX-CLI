@@ -31,6 +31,7 @@ ARCH_NAME="$(uname -m)"
 if [[ "${OS_NAME}" == "Darwin" && "${AUTO_INSTALL_SYSTEM_DEPS}" == "1" ]]; then
   if command -v brew >/dev/null 2>&1; then
     echo "检测到 Homebrew，检查并安装系统依赖（ripgrep/fd/ffmpeg/poppler/tesseract/node）..."
+    echo "（run_shell）全屏 TUI（如 mactop/htop/vim）不适合 Web 无头执行，服务端会快速拒绝；pmset -g thermlog 会持续输出，已自动截断；也可用 pmset -g therm / powermetrics -n 1 等。"
     missing_pkgs=()
     command -v rg >/dev/null 2>&1 || missing_pkgs+=("ripgrep")
     command -v fd >/dev/null 2>&1 || missing_pkgs+=("fd")

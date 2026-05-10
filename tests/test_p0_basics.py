@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from webapi.context_manager import ContextManager
-from webapi.execution_policy import check_command_policy
+from webapi.execution_policy import _abs_paths_for_workspace_boundary, check_command_policy
 from webapi.session_store import SessionStore
 
 
@@ -67,6 +67,17 @@ class P0BasicsTest(unittest.TestCase):
         self.assertTrue(messages)
         self.assertTrue(debug_rows)
         self.assertTrue(any(r["source"] == "current_user" for r in debug_rows))
+
+    def test_tilde_paths_not_misread_as_root_dotpath(self) -> None:
+        """~/.foo 中的 / 不应被当成 /.foo（曾误触发写路径越界）。"""
+        cmd = "mkdir -p ~/.myapp && touch ~/.myapp/run.log && echo ok 2>&1"
+        paths = _abs_paths_for_workspace_boundary(cmd)
+        self.assertNotIn("/.myapp", paths)
+        self.assertEqual(paths, [])
+
+    def test_absolute_paths_after_space_still_detected(self) -> None:
+        paths = _abs_paths_for_workspace_boundary("ls -la /etc/hosts")
+        self.assertIn("/etc/hosts", paths)
 
     def test_execution_policy_configurable(self) -> None:
         old = os.environ.get("OMLXCLI_EXEC_BLOCKLIST_RE")

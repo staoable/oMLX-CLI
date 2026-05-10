@@ -368,6 +368,17 @@
         <h3 id="confirmTitle">确认执行命令</h3>
         <p id="confirmReason" class="modal__reason"></p>
         <pre id="confirmCommand" class="modal__command"></pre>
+        <div id="confirmSudoRow" class="modal__sudo-row" hidden>
+          <label for="confirmSudoPassword" class="modal__sudo-label">sudo 密码（仅本次请求，不保存）</label>
+          <input
+            id="confirmSudoPassword"
+            type="password"
+            class="modal__sudo-input"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="已配置 NOPASSWD 可留空"
+          />
+        </div>
         <div class="modal__actions">
           <button id="cancelCommandBtn" type="button" class="btn btn--ghost">取消</button>
           <button id="confirmCommandBtn" type="button" class="btn btn--primary">确认执行</button>
@@ -377,6 +388,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.6/marked.min.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.2/dist/purify.min.js" crossorigin="anonymous"></script>
-    <script type="module" src="/ui/app.js"></script>
+    <script type="module" src="/ui/app.js?v=20260611-exec-summary"></script>
   </body>
 </html>

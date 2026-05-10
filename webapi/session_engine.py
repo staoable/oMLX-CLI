@@ -7,6 +7,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import time
 import uuid
@@ -42,6 +43,10 @@ from webapi.engine_protocol import (
 from webapi.config import load_execution_policy_config
 from webapi.execution_policy import check_command_policy
 from webapi.logging_utils import log_event
+from webapi.exec_user_summary import markdown_exec_digest, merge_answer_with_exec_digest, record_exec_digest
+from webapi.shell_guard import blocked_interactive_tui_message, wrap_known_streaming_shell_commands
+from webapi.shell_sudo import command_uses_sudo
+from webapi.shell_terminal import build_shell_argv, subprocess_run_kwargs_for_shell
 from webapi.session_store import SessionRecord, SessionStore
 from webapi.skill_context import skill_run_context
 from webapi.skill_runner import load_skills_registry, run_skill_call
@@ -492,6 +497,12 @@ class OiSessionEngine:
             f"- stdout:\n```text\n{result['stdout'] or '(empty)'}\n```\n"
             f"- stderr:\n```text\n{result['stderr'] or '(empty)'}\n```"
         )
+        if command_uses_sudo(cmd):
+            answer += (
+                "\n\n---\n"
+                "提示：通过聊天发送「确认执行:」无法附带 sudo 密码。若需要交互式密码，"
+                "请改用确认弹窗中的「sudo 密码」栏（仅本次请求），或在 sudoers 中为该命令配置 NOPASSWD。"
+            )
         metrics: dict[str, Any] = {
             "ttft_ms": 0.0,
             "gen_duration_ms": 0.0,
@@ -513,7 +524,13 @@ class OiSessionEngine:
         self.store.update_session(session_id, pending_command="")
         return answer
 
-    def run_confirmed_command(self, session_id: str, command: str) -> dict[str, Any]:
+    def run_confirmed_command(
+        self,
+        session_id: str,
+        command: str,
+        *,
+        sudo_password: str | None = None,
+    ) -> dict[str, Any]:
         session = self.store.get_session(session_id)
         cmd = (command or "").strip()
         pending = (session.pending_command or "").strip()
@@ -526,7 +543,12 @@ class OiSessionEngine:
             self.store.update_session(session_id, pending_command="")
             log_event("exec_blocked", session_id=session_id, exec_type="shell", command=cmd, reason=reason)
             raise ValueError(reason)
-        result = self._run_shell_command(cmd=cmd, cwd=workdir, timeout_sec=90)
+        result = self._run_shell_command(
+            cmd=cmd,
+            cwd=workdir,
+            timeout_sec=90,
+            sudo_password=sudo_password,
+        )
         log_event(
             "exec_finished",
             session_id=session_id,
@@ -651,6 +673,9 @@ class OiSessionEngine:
             convo.append({"role": "system", "content": skills_md})
         first_token_t: float | None = None
         max_rounds = max(1, min(int(os.getenv("OMLXCLI_MAX_EXEC_ROUNDS", "8")), 24))
+        protocol_autofix_left = 4
+        require_structured_next = False
+        exec_digest: list[dict[str, Any]] = []
         final_answer = ""
         executed_any = False
         usage_prompt: int | None = None
@@ -689,6 +714,7 @@ class OiSessionEngine:
 
             m_final = FINAL_ANSWER_RE.search(assistant_text)
             if m_final:
+                require_structured_next = False
                 final_answer = m_final.group(1).strip()
                 break
 
@@ -741,30 +767,69 @@ class OiSessionEngine:
                     "stdout": skill_ret["stdout"],
                     "stderr": skill_ret["stderr"],
                 }
+                record_exec_digest(
+                    exec_digest,
+                    kind="skill",
+                    command=f"skill: {skill_expr}",
+                    exit_code=skill_ret.get("exit_code"),
+                    stdout=str(skill_ret.get("stdout") or ""),
+                    stderr=str(skill_ret.get("stderr") or ""),
+                )
                 executed_any = True
                 if _skill_name_from_expr(skill_expr) == "claude_job_start":
                     stable = _stable_claude_job_start_answer(skill_ret)
                     if stable:
+                        require_structured_next = False
                         final_answer = stable
                         break
                 convo.append({"role": "assistant", "content": f"<run_skill>{skill_expr}</run_skill>"})
-                convo.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            f"[技能调用结果]\n> {skill_expr}\n"
-                            f"exit_code: {skill_ret['exit_code']}\n"
-                            f"stdout:\n{skill_ret['stdout']}\n\nstderr:\n{skill_ret['stderr']}\n"
-                            "请基于真实输出继续决策：如已完成，则输出 <final_answer>...</final_answer>；"
-                            "若需下一步，再输出一个 <run_shell>...</run_shell> 或 <run_skill>...</run_skill>。"
-                        ),
-                    }
-                )
+                try:
+                    _sec = int(skill_ret.get("exit_code") or 0)
+                except (TypeError, ValueError):
+                    _sec = 1
+                if _sec != 0:
+                    _skill_follow = (
+                        f"[技能调用结果]\n> {skill_expr}\n"
+                        f"exit_code: {skill_ret['exit_code']}\n"
+                        f"stdout:\n{skill_ret['stdout']}\n\nstderr:\n{skill_ret['stderr']}\n\n"
+                        "【协议 · 失败恢复】上一条技能非成功退出。除非已确认无法继续，"
+                        "下一轮须包含恰好一个 <run_shell>…</run_shell> 或 <run_skill>…</run_skill>；"
+                        "禁止仅输出无标签说明。必要时修正参数或改走 shell 排查。"
+                    )
+                else:
+                    _skill_follow = (
+                        f"[技能调用结果]\n> {skill_expr}\n"
+                        f"exit_code: {skill_ret['exit_code']}\n"
+                        f"stdout:\n{skill_ret['stdout']}\n\nstderr:\n{skill_ret['stderr']}\n"
+                        "请基于真实输出继续决策：如已完成，则输出 <final_answer>...</final_answer>；"
+                        "若需下一步，再输出一个 <run_shell>...</run_shell> 或 <run_skill>...</run_skill>。"
+                    )
+                convo.append({"role": "system", "content": _skill_follow})
+                require_structured_next = _sec != 0
                 continue
 
             m_run = RUN_SHELL_RE.search(assistant_text)
             if not m_run:
-                final_answer = assistant_text
+                if (
+                    require_structured_next
+                    and protocol_autofix_left > 0
+                    and not FINAL_ANSWER_RE.search(assistant_text)
+                ):
+                    protocol_autofix_left -= 1
+                    convo.append({"role": "assistant", "content": assistant_text})
+                    convo.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "【协议纠错】上一步工具执行失败，但本轮未包含 <run_shell> 或 <final_answer>。"
+                                "除非已确认无法继续，请严格只输出一行："
+                                "<run_shell>修正后的命令</run_shell>；或输出 <final_answer>…</final_answer> 收尾。"
+                            ),
+                        }
+                    )
+                    continue
+                require_structured_next = False
+                final_answer = merge_answer_with_exec_digest(assistant_text, markdown_exec_digest(exec_digest))
                 break
 
             cmd = m_run.group(1).strip()
@@ -777,6 +842,15 @@ class OiSessionEngine:
                 confirm_each=session.confirm_each,
             )
             if not ok:
+                record_exec_digest(
+                    exec_digest,
+                    kind="shell",
+                    command=cmd,
+                    exit_code=-1,
+                    stdout="",
+                    stderr=str(reason or ""),
+                    blocked=True,
+                )
                 final_answer = f"命令被安全策略阻止：{reason}\n\n命令：`{cmd}`"
                 log_event("exec_blocked", session_id=session_id, exec_type="shell", command=cmd, reason=reason)
                 self.store.add_execution(
@@ -796,6 +870,7 @@ class OiSessionEngine:
                     {"command": cmd[:400], "reason": reason},
                 )
                 self.store.update_session(session_id, pending_command="")
+                require_structured_next = False
                 break
             if need_confirm:
                 self.store.update_session(session_id, pending_command=cmd)
@@ -816,17 +891,35 @@ class OiSessionEngine:
                     "shell_need_confirm",
                     {"command": cmd[:400], "reason": reason},
                 )
+                record_exec_digest(
+                    exec_digest,
+                    kind="shell",
+                    command=cmd,
+                    exit_code=0,
+                    stdout="",
+                    stderr=str(reason or ""),
+                    pending_confirm=True,
+                )
                 yield {
                     "type": "require_confirm",
                     "command": cmd,
                     "reason": reason,
+                    "needs_sudo_password": command_uses_sudo(cmd),
                 }
+                sudo_hint = ""
+                if command_uses_sudo(cmd):
+                    sudo_hint = (
+                        "\n该命令包含 **sudo**：请在确认弹窗的「sudo 密码」中填写本机登录密码（仅随本次 HTTPS 请求发送，服务端不存储）；"
+                        "若已在 sudoers 中为该命令配置 NOPASSWD，可留空。"
+                    )
                 final_answer = (
                     "该命令需要确认后才能执行。\n"
                     f"- 原因：{reason}\n"
                     f"- 命令：`{cmd}`\n"
                     "请点击确认弹窗，或发送：`确认执行: <命令>`。"
+                    f"{sudo_hint}"
                 )
+                require_structured_next = False
                 break
             self.store.update_session(session_id, pending_command="")
             yield {"type": "exec_step", "command": cmd, "status": "running"}
@@ -864,20 +957,40 @@ class OiSessionEngine:
                 },
             )
             yield {"type": "exec_result", "command": cmd, **exec_result}
+            record_exec_digest(
+                exec_digest,
+                kind="shell",
+                command=cmd,
+                exit_code=exec_result.get("exit_code"),
+                stdout=str(exec_result.get("stdout") or ""),
+                stderr=str(exec_result.get("stderr") or ""),
+            )
             executed_any = True
             convo.append({"role": "assistant", "content": f"<run_shell>{cmd}</run_shell>"})
-            convo.append(
-                {
-                    "role": "system",
-                    "content": (
-                        f"[命令执行结果]\n$ {cmd}\n"
-                        f"exit_code: {exec_result['exit_code']}\n"
-                        f"stdout:\n{exec_result['stdout']}\n\nstderr:\n{exec_result['stderr']}\n"
-                        "请基于真实输出继续决策：如已完成，则输出 <final_answer>...</final_answer>；"
-                        "若需下一步，再输出一个 <run_shell>...</run_shell>。"
-                    ),
-                }
-            )
+            try:
+                _ec = int(exec_result.get("exit_code") or 0)
+            except (TypeError, ValueError):
+                _ec = 1
+            if _ec != 0:
+                _follow = (
+                    f"[命令执行结果]\n$ {cmd}\n"
+                    f"exit_code: {exec_result['exit_code']}\n"
+                    f"stdout:\n{exec_result['stdout']}\n\nstderr:\n{exec_result['stderr']}\n\n"
+                    "【协议 · 失败恢复】上一条 shell 非成功退出。除非已确认无法通过改命令解决，"
+                    "下一轮回复必须包含恰好一个 <run_shell>…</run_shell>（例如先跑 `--help` / `-h`、"
+                    "按文档修正参数、或换等价命令）；禁止只输出无标签的自然语言（会被视为终态而结束多轮循环）。"
+                    "仅当确定无需再执行命令时，才用 <final_answer>…</final_answer> 说明原因与可行替代方案。"
+                )
+            else:
+                _follow = (
+                    f"[命令执行结果]\n$ {cmd}\n"
+                    f"exit_code: {exec_result['exit_code']}\n"
+                    f"stdout:\n{exec_result['stdout']}\n\nstderr:\n{exec_result['stderr']}\n"
+                    "请基于真实输出继续决策：如已完成，则输出 <final_answer>...</final_answer>；"
+                    "若需下一步，再输出一个 <run_shell>...</run_shell>。"
+                )
+            convo.append({"role": "system", "content": _follow})
+            require_structured_next = _ec != 0
 
         if not final_answer and executed_any:
             # 若多轮执行后仍未显式给出 <final_answer>，强制一次“只允许总结”的收敛回合，
@@ -893,8 +1006,9 @@ class OiSessionEngine:
                             "role": "system",
                             "content": (
                                 "你已经拿到命令执行结果。现在禁止再输出 <run_shell>。"
-                                "请直接基于现有结果给出最终中文答复，并使用 "
-                                "<final_answer>...</final_answer> 包裹。"
+                                "请先用一两句通俗中文说明：从命令输出来看，用户任务是「已完成」还是「未完成」；"
+                                "若未完成，必须点明主要原因（如超时、权限、输出为空、参数错误等）。"
+                                "然后给出详细说明，并用 <final_answer>...</final_answer> 包裹全文。"
                             ),
                         }
                     ],
@@ -926,9 +1040,13 @@ class OiSessionEngine:
 
         if not final_answer:
             if executed_any:
-                final_answer = "命令已执行，但未能自动收敛出最终结论。请补充你希望我继续的方向（例如：读取文件、提取要点、给出风险清单）。"
+                final_answer = "模型未生成最终说明；下方「命令执行摘要」列出了本步实际退出情况，请查看。"
             else:
-                final_answer = "未能得到有效结果，请重试。"
+                final_answer = "本轮没有执行任何命令；请换种方式描述你的目标，或检查是否已开启「允许执行」。"
+
+        if exec_digest:
+            digest_md = markdown_exec_digest(exec_digest)
+            final_answer = merge_answer_with_exec_digest(final_answer, digest_md)
 
         for piece in chunk_text(final_answer):
             yield {"type": "delta", "content": piece}
@@ -992,21 +1110,42 @@ class OiSessionEngine:
         )
 
     @staticmethod
-    def _run_shell_command(cmd: str, cwd: str, timeout_sec: int = 90) -> dict[str, Any]:
+    def _run_shell_command(
+        cmd: str,
+        cwd: str,
+        timeout_sec: int = 90,
+        *,
+        sudo_password: str | None = None,
+    ) -> dict[str, Any]:
+        from webapi.shell_sudo import inject_sudo_stdin_mode
+
         t0 = time.perf_counter()
-        if os.name == "nt":
-            argv = [os.environ.get("ComSpec", "cmd.exe"), "/c", cmd]
-        else:
-            shell = os.environ.get("SHELL") or "/bin/sh"
-            argv = [shell, "-c", cmd]
+        pw = (sudo_password or "").strip()
+        exec_cmd = (cmd or "").strip()
+        if pw and command_uses_sudo(exec_cmd):
+            exec_cmd = inject_sudo_stdin_mode(exec_cmd)
+        tui_block = blocked_interactive_tui_message(exec_cmd)
+        if tui_block:
+            return {
+                "exit_code": 125,
+                "stdout": "",
+                "stderr": tui_block,
+                "duration_ms": round((time.perf_counter() - t0) * 1000, 1),
+            }
+        exec_cmd = wrap_known_streaming_shell_commands(exec_cmd)
+        argv = build_shell_argv(exec_cmd)
+        run_kw: dict[str, Any] = {
+            "cwd": cwd,
+            "capture_output": True,
+            "text": True,
+            "timeout": timeout_sec,
+        }
+        run_kw.update(subprocess_run_kwargs_for_shell())
+        if pw and command_uses_sudo(cmd):
+            run_kw["input"] = pw + "\n"
+            run_kw.pop("stdin", None)
         try:
-            proc = subprocess.run(
-                argv,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=timeout_sec,
-            )
+            proc = subprocess.run(argv, **run_kw)
             stdout = (proc.stdout or "").strip()[:12000]
             stderr = (proc.stderr or "").strip()[:12000]
             return {
@@ -1016,10 +1155,21 @@ class OiSessionEngine:
                 "duration_ms": round((time.perf_counter() - t0) * 1000, 1),
             }
         except subprocess.TimeoutExpired:
+            try:
+                argv_repr = " ".join(shlex.quote(a) for a in argv)
+            except Exception:  # noqa: BLE001
+                argv_repr = repr(argv)
             return {
                 "exit_code": 124,
                 "stdout": "",
-                "stderr": "命令执行超时。",
+                "stderr": (
+                    f"命令执行超时（>{timeout_sec}s）。\n"
+                    f"- cwd: {cwd}\n"
+                    f"- argv: {argv_repr}\n"
+                    f"- 原始命令: {(cmd or '').strip()[:800]}\n"
+                    "提示：若为 TUI（如 mactop/htop/vim）或持续输出类命令（如未截断的 thermlog），无头环境会挂起；"
+                    "可换 `pmset -g therm`、带 `-n` 的 powermetrics，或自行在命令末尾加 `| head`。"
+                ),
                 "duration_ms": round((time.perf_counter() - t0) * 1000, 1),
             }
         except Exception as exc:  # noqa: BLE001

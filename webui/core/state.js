@@ -29,6 +29,8 @@ export const state = {
     executions: [],
     contextInjections: [],
   },
+  /** 单附件字节上限，由 GET /api/ui-config 同步；未拉取前为 null */
+  maxAttachmentEachBytes: null,
 };
 
 export function el(id) {

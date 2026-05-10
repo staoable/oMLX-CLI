@@ -239,6 +239,18 @@ class ApiIntegrationTest(unittest.TestCase):
         body = r.json()
         self.assertEqual(body.get("api_key"), "dummy-key-for-tests")
 
+    def test_ui_config_exposes_message_limits(self) -> None:
+        r = self.client.get("/api/ui-config")
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertIn("msg_max_body_bytes", data)
+        self.assertIn("msg_max_attachments_bytes", data)
+        self.assertIn("msg_max_attachment_each_bytes", data)
+        each = int(data["msg_max_attachment_each_bytes"])
+        att = int(data["msg_max_attachments_bytes"])
+        self.assertGreater(each, 0)
+        self.assertLessEqual(each, att)
+
     def test_list_vendors_omits_api_key(self) -> None:
         r = self.client.get("/api/vendors")
         self.assertEqual(r.status_code, 200)

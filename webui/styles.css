@@ -1007,6 +1007,12 @@ body {
   color: var(--text-secondary);
 }
 
+.exec-step__title {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
 .exec-step__cmd {
   font-family: var(--font-mono);
   color: #93c5fd;
@@ -1706,6 +1712,29 @@ body {
   color: #93c5fd;
   font-family: var(--font-mono);
   white-space: pre-wrap;
+}
+
+.modal__sudo-row {
+  margin: 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.modal__sudo-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.modal__sudo-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  font-size: 14px;
 }
 
 .modal__actions {

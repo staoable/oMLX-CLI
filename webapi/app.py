@@ -52,6 +52,9 @@ engine = OiSessionEngine(store, ctx)
 _msg_rate_lock = threading.Lock()
 _msg_rate_hits: dict[str, deque[float]] = {}
 
+# 消息/附件相关环境变量在代码中的硬上限（防误配极大值拖垮进程）；与 .env.example 说明一致。
+_MSG_HARD_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB
+
 
 def _msg_rate_limit_count() -> int:
     raw = (os.getenv("OMLXCLI_MSG_RATE_LIMIT_COUNT") or "20").strip()
@@ -105,7 +108,7 @@ def _msg_max_body_bytes() -> int:
         n = int(raw)
     except ValueError:
         return 5 * 1024 * 1024
-    return max(64 * 1024, min(n, 50 * 1024 * 1024))
+    return max(64 * 1024, min(n, _MSG_HARD_MAX_BYTES))
 
 
 def _msg_max_attachments_bytes() -> int:
@@ -114,7 +117,28 @@ def _msg_max_attachments_bytes() -> int:
         n = int(raw)
     except ValueError:
         return 6 * 1024 * 1024
-    return max(64 * 1024, min(n, 200 * 1024 * 1024))
+    return max(64 * 1024, min(n, _MSG_HARD_MAX_BYTES))
+
+
+def _msg_max_attachment_each_bytes() -> int:
+    """Web UI 单文件附件上限：与 _msg_max_attachments_bytes / _msg_max_body_bytes 一致，避免只调大 .env 仍被前端硬编码拦住。
+
+    默认取 min(附件总预算, 请求体预算×0.65)，为 JSON + base64 留出余量。可选 OMLXCLI_MSG_MAX_ATTACHMENT_EACH_BYTES
+    覆盖，但仍不会超过上述两预算推导出的硬上限。
+    """
+    att_cap = _msg_max_attachments_bytes()
+    body_cap = _msg_max_body_bytes()
+    from_body = max(64 * 1024, int(body_cap * 0.65))
+    hard_cap = min(att_cap, from_body)
+    raw = (os.getenv("OMLXCLI_MSG_MAX_ATTACHMENT_EACH_BYTES") or "").strip()
+    if raw:
+        try:
+            n = int(raw)
+            n = max(64 * 1024, min(n, _MSG_HARD_MAX_BYTES))
+            return max(64 * 1024, min(n, hard_cap))
+        except ValueError:
+            pass
+    return hard_cap
 
 
 def _estimate_attachments_bytes(attachments: list[dict[str, Any]]) -> int:
@@ -296,6 +320,10 @@ class BatchArchiveSessionsReq(BaseModel):
 class ConfirmCommandReq(BaseModel):
     command: str
     approve: bool = True
+    sudo_password: str | None = Field(
+        default=None,
+        description="approve=true 时可选；命令含 sudo 且非 NOPASSWD 时由前端填入，经 sudo -S 从 stdin 传入，不落库、不写日志",
+    )
 
 
 def _normalize_workspace_path(raw: str) -> str:
@@ -324,6 +352,16 @@ def api_diagnostics() -> dict[str, Any]:
         webui_dir=WEBUI_DIR,
         default_workspace=DEFAULT_WORKSPACE,
     )
+
+
+@app.get("/api/ui-config")
+def api_ui_config() -> dict[str, Any]:
+    """供 Web UI 读取与 .env 一致的消息/附件限额（无敏感信息）。"""
+    return {
+        "msg_max_body_bytes": _msg_max_body_bytes(),
+        "msg_max_attachments_bytes": _msg_max_attachments_bytes(),
+        "msg_max_attachment_each_bytes": _msg_max_attachment_each_bytes(),
+    }
 
 
 def _fetch_upstream_model_ids(api_base: str, api_key: str) -> tuple[str, list[str]]:
@@ -668,7 +706,11 @@ def confirm_command(session_id: str, req: ConfirmCommandReq) -> dict[str, Any]:
         log_event("command_confirm_rejected", session_id=session_id, command=req.command)
         return {"status": "cancelled", "message": msg}
     try:
-        result = engine.run_confirmed_command(session_id=session_id, command=req.command)
+        result = engine.run_confirmed_command(
+            session_id=session_id,
+            command=req.command,
+            sudo_password=req.sudo_password if req.approve else None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

@@ -91,6 +91,20 @@ def main() -> None:
         raise SystemExit(1)
     print(f"OK {dcode} {diag_url}")
 
+    ui_url = f"{base}/api/ui-config"
+    try:
+        ucode, udata = _get_json(ui_url)
+    except urllib.error.HTTPError as exc:
+        print(f"FAIL {ui_url} HTTP {exc.code}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    except OSError as exc:
+        print(f"FAIL {ui_url} {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    if ucode >= 400 or not isinstance(udata, dict) or "msg_max_attachment_each_bytes" not in udata:
+        print(f"FAIL {ui_url} status={ucode} body_keys={list(udata)[:8]}", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"OK {ucode} {ui_url}")
+
     # 写路径最小冒烟：POST -> PATCH -> DELETE 会话。
     post_url = f"{base}/api/sessions"
     code, data = _request_json(post_url, method="POST", payload={"title": "smoke-http-write"})

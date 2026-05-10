@@ -85,15 +85,32 @@ function setModalVisible(v) {
   el("confirmModal").hidden = !v;
 }
 
-function openConfirmModal(command, reason) {
-  state.pendingConfirm = { command, reason };
+function openConfirmModal(command, reason, options = {}) {
+  state.pendingConfirm = {
+    command,
+    reason,
+    needsSudoPassword: Boolean(options.needsSudoPassword),
+  };
   el("confirmCommand").textContent = command || "";
   el("confirmReason").textContent = reason || "该命令需要你确认后才执行。";
+  const row = el("confirmSudoRow");
+  const pw = el("confirmSudoPassword");
+  if (row && pw) {
+    pw.value = "";
+    row.hidden = !state.pendingConfirm.needsSudoPassword;
+    if (!row.hidden) {
+      requestAnimationFrame(() => pw.focus());
+    }
+  }
   setModalVisible(true);
 }
 
 function closeConfirmModal() {
   state.pendingConfirm = null;
+  const pw = el("confirmSudoPassword");
+  if (pw) pw.value = "";
+  const row = el("confirmSudoRow");
+  if (row) row.hidden = true;
   setModalVisible(false);
 }
 
@@ -512,13 +529,21 @@ function appendExecStep(step) {
   div.className = "exec-step";
   const cmd = escapeHtml(step.command || "");
   if (step.type === "exec_step") {
-    div.innerHTML = `<div>执行命令</div><div class="exec-step__cmd">$ ${cmd}</div>`;
+    div.innerHTML = `<div class="exec-step__title">正在执行</div><div class="exec-step__cmd">$ ${cmd}</div>`;
   } else {
     const exitCode = Number(step.exit_code ?? 0);
     const shortOut = String(step.stdout || "").slice(0, 280);
     const shortErr = String(step.stderr || "").slice(0, 280);
+    const statusZh =
+      exitCode === 0
+        ? "已完成"
+        : exitCode === 124
+          ? "未完成（超时）"
+          : exitCode === 125
+            ? "未执行（被拦截）"
+            : "未完成（出错）";
     div.innerHTML =
-      `<div>命令结果</div><div class="exec-step__cmd">$ ${cmd}</div>` +
+      `<div class="exec-step__title">执行结果 · <strong>${statusZh}</strong></div><div class="exec-step__cmd">$ ${cmd}</div>` +
       `<div class="exec-step__meta">exit_code=${exitCode}` +
       `${shortOut ? ` · stdout: ${escapeHtml(shortOut)}` : ""}` +
       `${shortErr ? ` · stderr: ${escapeHtml(shortErr)}` : ""}</div>`;
@@ -979,7 +1004,35 @@ function humanSize(n) {
   const b = Number(n || 0);
   if (b < 1024) return `${b}B`;
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)}KB`;
-  return `${(b / 1024 / 1024).toFixed(1)}MB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)}MB`;
+  return `${(b / (1024 * 1024 * 1024)).toFixed(2)}GB`;
+}
+
+/** 与后端 1GiB/1GiB 推导一致；仅在无法 GET /api/ui-config 时作后备，避免仍卡在 25MB */
+const _UI_FALLBACK_MAX_EACH_BYTES = Math.min(
+  1073741824,
+  Math.floor(1073741824 * 0.65),
+);
+
+function maxAttachmentEachBytesForClient() {
+  const n = state.maxAttachmentEachBytes;
+  if (typeof n === "number" && Number.isFinite(n) && n > 0) {
+    return Math.floor(n);
+  }
+  return _UI_FALLBACK_MAX_EACH_BYTES;
+}
+
+async function refreshUiConfig() {
+  try {
+    const d = await api("/api/ui-config");
+    const raw = d.msg_max_attachment_each_bytes;
+    const n = typeof raw === "number" ? raw : Number(raw);
+    if (Number.isFinite(n) && n > 0) {
+      state.maxAttachmentEachBytes = Math.floor(n);
+    }
+  } catch {
+    /* 保持 maxAttachmentEachBytes 不变或使用后备 */
+  }
 }
 
 function renderAttachmentTray() {
@@ -1002,10 +1055,43 @@ function renderAttachmentTray() {
   }
 }
 
+function guessMimeFromFilename(name) {
+  const n = String(name || "").toLowerCase();
+  const dot = n.lastIndexOf(".");
+  if (dot < 0) return "";
+  const ext = n.slice(dot + 1).split("?")[0].split("#")[0];
+  const map = {
+    mp4: "video/mp4",
+    m4v: "video/mp4",
+    mov: "video/quicktime",
+    webm: "video/webm",
+    mkv: "video/x-matroska",
+    avi: "video/x-msvideo",
+    mpeg: "video/mpeg",
+    mpg: "video/mpeg",
+    "3gp": "video/3gpp",
+    ogv: "video/ogg",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+    bmp: "image/bmp",
+    mp3: "audio/mpeg",
+    wav: "audio/wav",
+    m4a: "audio/mp4",
+    flac: "audio/flac",
+    ogg: "audio/ogg",
+    aac: "audio/aac",
+  };
+  return map[ext] || "";
+}
+
 function normalizePastedFile(file) {
   if (!file) return null;
   const name = file.name || `paste-${Date.now()}`;
-  const mime = file.type || "application/octet-stream";
+  const t = (file.type && String(file.type).trim()) || "";
+  const mime = t || guessMimeFromFilename(name) || "application/octet-stream";
   const size = file.size || 0;
   return { file, name, mime, size, id: `${name}-${size}-${Date.now()}-${Math.random()}` };
 }
@@ -1019,14 +1105,20 @@ function fileToDataUrl(file) {
   });
 }
 
-function addFiles(files) {
-  const maxEach = 25 * 1024 * 1024;
+async function addFiles(files) {
+  if (state.maxAttachmentEachBytes == null) {
+    await refreshUiConfig();
+  }
+  const maxEach = maxAttachmentEachBytesForClient();
   const arr = Array.from(files || []);
   for (const f of arr) {
     const n = normalizePastedFile(f);
     if (!n) continue;
     if (n.size > maxEach) {
-      appendAssistantMessage(`附件 ${n.name} 超过 25MB，已跳过。`, { error: true });
+      appendAssistantMessage(
+        `附件 ${n.name} 超过服务端允许的单文件上限（${humanSize(maxEach)}），已跳过。可在 .env 中调整 OMLXCLI_MSG_MAX_BODY_BYTES / OMLXCLI_MSG_MAX_ATTACHMENTS_BYTES（可选 OMLXCLI_MSG_MAX_ATTACHMENT_EACH_BYTES）后重启 uvicorn；并强制刷新页面（Cmd+Shift+R）以加载最新 /ui/app.js。`,
+        { error: true },
+      );
       continue;
     }
     state.pendingAttachments.push(n);
@@ -1290,7 +1382,9 @@ async function sendMessage() {
       } else if (eventType === "agent_trace") {
         appendTraceRow(parsed);
       } else if (eventType === "require_confirm") {
-        openConfirmModal(parsed.command || "", parsed.reason || "");
+        openConfirmModal(parsed.command || "", parsed.reason || "", {
+          needsSudoPassword: Boolean(parsed.needs_sudo_password),
+        });
       } else if (eventType === "metrics") {
         /* 指标已写入数据库，流结束后 selectSession 会带出 */
       } else if (eventType === "error") {
@@ -1317,14 +1411,20 @@ async function sendMessage() {
 
 async function confirmPendingCommand(approve) {
   if (!state.currentSessionId || !state.pendingConfirm) return;
-  const { command } = state.pendingConfirm;
+  const { command, needsSudoPassword } = state.pendingConfirm;
+  const sudoPassword =
+    approve && needsSudoPassword ? String(el("confirmSudoPassword")?.value || "").trim() : "";
   closeConfirmModal();
   setSending(true);
   beginAssistantStream();
   try {
+    const payload = { command, approve };
+    if (approve && sudoPassword) {
+      payload.sudo_password = sudoPassword;
+    }
     const res = await api(`/api/sessions/${state.currentSessionId}/confirm-command`, {
       method: "POST",
-      body: JSON.stringify({ command, approve }),
+      body: JSON.stringify(payload),
     });
     if (res.status === "cancelled") {
       removeStreamingPlaceholder();
@@ -1796,8 +1896,10 @@ document.addEventListener("keydown", (e) => {
 
 el("attachBtn").addEventListener("click", () => el("fileInput").click());
 el("fileInput").addEventListener("change", (e) => {
-  addFiles(e.target.files);
-  e.target.value = "";
+  void (async () => {
+    await addFiles(e.target.files);
+    e.target.value = "";
+  })();
 });
 
 el("messageInput").addEventListener("input", resizeComposer);
@@ -1817,7 +1919,7 @@ el("messageInput").addEventListener("paste", (e) => {
     .filter(Boolean);
   if (files.length) {
     e.preventDefault();
-    addFiles(files);
+    void addFiles(files);
   }
 });
 document.addEventListener("dragover", (e) => {
@@ -1829,7 +1931,7 @@ document.addEventListener("drop", (e) => {
   const files = Array.from(e.dataTransfer?.files || []);
   if (!files.length) return;
   e.preventDefault();
-  addFiles(files);
+  void addFiles(files);
 });
 
 initSidebar();
@@ -1843,7 +1945,13 @@ if (archivedToggle) {
     loadSessions();
   });
 }
-loadSessions()
-  .then(() => maybeShowOnboarding())
-  .catch(() => {});
+(async () => {
+  await refreshUiConfig();
+  try {
+    await loadSessions();
+    await maybeShowOnboarding();
+  } catch {
+    /* ignore */
+  }
+})();
 startClaudeJobsBackgroundPolling();
